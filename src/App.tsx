@@ -627,7 +627,7 @@ export default function App() {
         if (trade.status === "OPEN") {
           // Check SL
           if (trade.type === "CE" && candle.low <= trade.stopLossIndex) {
-            const lossAmt = (trade.entryPrice - 40.0) * 75; // Simulation loss of 40 premium points
+            const lossAmt = (trade.entryPrice - 40.0) * 65; // Simulation loss of 40 premium points
             addLog("ERROR", `🛑 STOP LOSS HIT on NIFTY index at ₹${trade.stopLossIndex}`);
             addLog("ERROR", `Closed CE position at SL. Realized loss: -₹${lossAmt}`);
             setDailyPnL((prev) => prev - lossAmt);
@@ -641,7 +641,7 @@ export default function App() {
           }
           // Check TP
           if (trade.type === "CE" && candle.high >= trade.takeProfitIndex) {
-            const gainAmt = (165.0 - trade.entryPrice) * 75; // 165 exit premium
+            const gainAmt = (165.0 - trade.entryPrice) * 65; // 165 exit premium
             addLog("SUCCESS", `🎯 TAKE PROFIT TARGET REACHED on NIFTY index at ${trade.takeProfitIndex}`);
             addLog("SUCCESS", `Closed CE position at TP. Realized profit: +₹${gainAmt}`);
             setDailyPnL((prev) => prev + gainAmt);

@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     DAILY_LOSS_LIMIT: float = Field(default=2000.0, description="Daily Stop-Loss limit in currency units (INR)")
     MAX_DAILY_TRADES: int = Field(default=2, description="Maximum number of trade executions allowed per day")
     POSITION_LOTS: int = Field(default=1, description="Number of lots to trade per order")
+    NIFTY_LOT_SIZE: int = Field(default=65, description="Current Nifty options lot size")
     
     class Config:
         env_file = ".env"
@@ -90,6 +91,7 @@ except Exception as e:
         DAILY_LOSS_LIMIT = float(os.environ.get("DAILY_LOSS_LIMIT", 2000.0))
         MAX_DAILY_TRADES = int(os.environ.get("MAX_DAILY_TRADES", 2))
         POSITION_LOTS = int(os.environ.get("POSITION_LOTS", 1))
+        NIFTY_LOT_SIZE = int(os.environ.get("NIFTY_LOT_SIZE", 65))
     settings = FallbackSettings()
 
 # Configure logging
