@@ -1,0 +1,33 @@
+2026-05-30 15:34:59,564 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-05-30 15:34:59,623 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-05-30 15:34:59,627 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-30 15:34:59,627 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-05-30 15:34:59,628 [INFO] apscheduler.scheduler: Added job "monitor_interval_tick" to job store "default"
+2026-05-30 15:34:59,628 [INFO] apscheduler.scheduler: Added job "check_active_position_targets" to job store "default"
+2026-05-30 15:34:59,628 [INFO] apscheduler.scheduler: Scheduler started
+2026-05-30 15:34:59,628 [INFO] CPR_System.Main: [LIVE] Scheduler started: monitoring NIFTY 50 on 5-minute candle boundaries (cron */5 +30s offset) & checking SL/TP targets every 30s.
+2026-05-30 15:35:21,889 [WARNING] CPR_System.Upstox: Mock mode: using hardcoded previous day OHLC for CPR calculation.
+2026-05-30 15:35:21,889 [WARNING] CPR_System.Main: CPR levels computed from HARDCODED fallback values (no live OHLC available). Authenticate with Upstox to get accurate CPR levels.
+2026-05-30 15:35:21,891 [INFO] CPR_System.Risk: Initializing new risk status records for date: 2026-05-30
+2026-05-30 15:35:29,633 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:35:59 IST)" (scheduled at 2026-05-30 15:35:29.627779+05:30)
+2026-05-30 15:35:29,634 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:35:29,634 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:35:59 IST)" executed successfully
+2026-05-30 15:35:30,001 [INFO] apscheduler.executors.default: Running job "monitor_interval_tick (trigger: cron[minute='*/5', second='30'], next run at: 2026-05-30 15:40:30 IST)" (scheduled at 2026-05-30 15:35:30+05:30)
+2026-05-30 15:35:30,001 [INFO] CPR_System.Main: MARKET_OPEN=False DATA_SOURCE=DISCONNECTED CMP_SOURCE=DISCONNECTED
+2026-05-30 15:35:30,001 [INFO] CPR_System.Main: Market is currently closed — skipping candle processing and strategy evaluation.
+2026-05-30 15:35:30,002 [INFO] apscheduler.executors.default: Job "monitor_interval_tick (trigger: cron[minute='*/5', second='30'], next run at: 2026-05-30 15:40:30 IST)" executed successfully
+2026-05-30 15:35:59,630 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:36:29 IST)" (scheduled at 2026-05-30 15:35:59.627779+05:30)
+2026-05-30 15:35:59,630 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:35:59,631 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:36:29 IST)" executed successfully
+2026-05-30 15:36:29,634 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:36:59 IST)" (scheduled at 2026-05-30 15:36:29.627779+05:30)
+2026-05-30 15:36:29,636 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:36:29,636 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:36:59 IST)" executed successfully
+2026-05-30 15:36:59,629 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:37:29 IST)" (scheduled at 2026-05-30 15:36:59.627779+05:30)
+2026-05-30 15:36:59,629 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:36:59,630 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:37:29 IST)" executed successfully
+2026-05-30 15:37:29,633 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:37:59 IST)" (scheduled at 2026-05-30 15:37:29.627779+05:30)
+2026-05-30 15:37:29,633 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:37:29,633 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:37:59 IST)" executed successfully
+2026-05-30 15:37:59,633 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:38:29 IST)" (scheduled at 2026-05-30 15:37:59.627779+05:30)
+2026-05-30 15:37:59,634 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
+2026-05-30 15:37:59,634 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:38:29 IST)" executed successfully

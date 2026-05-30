@@ -21,6 +21,9 @@ class UpstoxClient:
         # Track last live candle metadata for dashboard status cards
         self.last_live_candle_time: Optional[str] = None
         self.last_cmp_update_time: Optional[str] = None
+        # Cache the last successfully fetched LTP so the dashboard can show
+        # the most recently known CMP even when live fetching fails.
+        self.last_known_ltp: Optional[float] = None
         self.cmp_source: str = "DISCONNECTED"
         self.websocket_status: str = "Disconnected"
         self.data_source: str = "DISCONNECTED"  # "UPSTOX LIVE" | "HISTORICAL REPLAY" | "SIMULATION" | "DISCONNECTED"
@@ -406,6 +409,8 @@ class UpstoxClient:
                 data = response.json()
                 last_price = data.get("data", {}).get("NSE_INDEX|Nifty 50", {}).get("last_price")
                 if last_price is not None:
+                    # Update cached LTP and metadata
+                    self.last_known_ltp = float(last_price)
                     self.cmp_source = "UPSTOX_LTP"
                     self.last_cmp_update_time = datetime.utcnow().isoformat()
                     self.data_source = "UPSTOX LIVE"
@@ -415,10 +420,18 @@ class UpstoxClient:
                 logger.warning("Upstox LTP response missing last_price. CMP source set to DISCONNECTED.")
         except Exception as e:
             logger.error(f"Error fetching LTP: {e}")
+        # On failure to fetch live LTP, keep the previous cached LTP intact
+        # so the dashboard can continue to show the last-known CMP.
         self.data_source = "DISCONNECTED"
-        self.cmp_source = "DISCONNECTED"
         self.websocket_status = "Disconnected"
-        self.last_cmp_update_time = None
+        # Do not clear `last_known_ltp` here; preserve the last value.
+        # Only clear `last_cmp_update_time` if no cached LTP exists.
+        if not self.last_known_ltp:
+            self.cmp_source = "DISCONNECTED"
+            self.last_cmp_update_time = None
+        else:
+            # Indicate that the source is a cached value
+            self.cmp_source = "CACHED"
         return None
 
     def get_previous_day_ohlc(self) -> Optional[Dict]:

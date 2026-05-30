@@ -361,6 +361,39 @@ export default function App() {
     }
   };
 
+  const fetchRecentTrades = async () => {
+    try {
+      const res = await fetch('/api/trades');
+      if (res.ok) {
+        const data = await res.json();
+        const backendTrades = (data.trades || []).map((t: any) => ({
+          id: `P-${t.id}`,
+          setupName: t.setup_name,
+          type: t.option_type || (t.trade_type === 'BUY' ? 'CE' : 'PE'),
+          strikePrice: t.strike_price || 0,
+          entryPrice: t.entry_price || 0,
+          exitPrice: t.exit_price || null,
+          stopLossIndex: t.stop_loss || 0,
+          takeProfitIndex: t.take_profit || 0,
+          pnl: t.pnl || 0,
+          status: t.status || 'OPEN',
+          entryTime: t.entry_time || '',
+          exitTime: t.exit_time || null
+        }));
+
+        if (backendTrades.length > 0) {
+          setTrades(backendTrades);
+          setDailyTradesCount(data.metrics?.total_trades ?? backendTrades.length);
+          setDailyPnL(data.metrics?.net_pnl ?? 0);
+        } else {
+          setTrades(INITIAL_TRADES);
+        }
+      }
+    } catch (e) {
+      // ignore errors and keep current trades state
+    }
+  };
+
   const handleConnectUpstox = async () => {
     setValidationError(null);
 
@@ -478,7 +511,8 @@ export default function App() {
   });
 
   const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "broker" | "help">("cockpit");
-  const [trades, setTrades] = useState<SimulatedTrade[]>(INITIAL_TRADES);
+  // Prefer backend trades; fall back to demo trades if backend returns none.
+  const [trades, setTrades] = useState<SimulatedTrade[]>([]);
 
   const [dailyTradesCount, setDailyTradesCount] = useState(7);
   const [dailyPnL, setDailyPnL] = useState(6000);
@@ -545,9 +579,12 @@ export default function App() {
   useEffect(() => {
     fetchUpstoxStatus();
     fetchLiveStatus();
+    fetchRecentTrades();
 
     // Poll live system status every 10 seconds
     const liveStatusTimer = setInterval(fetchLiveStatus, 10_000);
+    // Poll trades every 30 seconds
+    const tradesTimer = setInterval(fetchRecentTrades, 30_000);
 
     // Check url query params for OAuth return success redirect (standard redirection fallback)
     const urlParams = new URLSearchParams(window.location.search);
@@ -575,6 +612,7 @@ export default function App() {
     return () => {
       window.removeEventListener("message", handleOAuthMessage);
       clearInterval(liveStatusTimer);
+      clearInterval(tradesTimer);
     };
   }, []);
 

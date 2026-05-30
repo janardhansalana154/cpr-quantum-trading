@@ -315,7 +315,16 @@ def get_system_status(db: Session = Depends(get_db)):
     daily = rm.get_or_create_daily_state()
     conn_status = upstox.get_connection_status()
 
-    current_ltp = upstox.get_nifty_price()
+    # Use the cached last-known LTP if live fetch is unavailable to avoid
+    # forcing a network call during status requests (and to surface the
+    # most recent CMP when market is closed).
+    current_ltp = upstox.last_known_ltp
+    # If the client has gone disconnected but a cached LTP exists, indicate that
+    # the value is a cached source so the frontend can label it accordingly.
+    cmp_source = upstox.cmp_source if upstox.cmp_source != "DISCONNECTED" else (
+        "CACHED" if upstox.last_known_ltp is not None else "DISCONNECTED"
+    )
+
     return {
         "status": "Running",
         "timestamp": datetime.utcnow().isoformat(),
@@ -323,7 +332,7 @@ def get_system_status(db: Session = Depends(get_db)):
         "market_status": "OPEN" if upstox.is_market_open() else "CLOSED",
         "cpr_levels": levels,
         "nifty_ltp": current_ltp,
-        "cmp_source": upstox.cmp_source,
+        "cmp_source": cmp_source,
         "last_cmp_update_time": upstox.last_cmp_update_time,
         "data_source": upstox.data_source,
         "last_live_candle_time": upstox.last_live_candle_time,
