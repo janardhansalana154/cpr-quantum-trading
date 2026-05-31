@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -246,6 +246,10 @@ def monitor_interval_tick():
                         f"[LIVE] Strategy evaluated — {name} TRIGGERED on candle "
                         f"{latest_candle_time} | Close={latest_candle['close']}"
                     )
+
+                    if _trading_paused:
+                        logger.warning(f"[PAUSED] Signal detected for {name} but trading is PAUSED by user. Skipping order.")
+                        continue
 
                     if rm.can_trade():
                         opt_sym, strike, opt_type = upstox.select_atm_option(
@@ -532,6 +536,82 @@ def reset_strategy_states():
     for name, m in setups.items():
         m.reset_state(0, "User manual reset")
     return {"status": "success", "message": "All strategy setup state machines reset to IDLE."}
+
+
+# ---------------------------------------------------------------
+# FEATURE 1: Pause / Resume Trading
+# ---------------------------------------------------------------
+_trading_paused: bool = False
+
+@app.post("/api/pause-trading")
+def pause_trading():
+    """Pauses all live trade execution. Strategy engine still runs but will not place any orders."""
+    global _trading_paused
+    _trading_paused = True
+    logger.warning("TRADING PAUSED by user via dashboard. No new orders will be placed.")
+    return {"status": "paused", "message": "Trading paused. No new orders will be placed until resumed."}
+
+@app.post("/api/resume-trading")
+def resume_trading():
+    """Resumes live trade execution after a pause."""
+    global _trading_paused
+    _trading_paused = False
+    logger.info("TRADING RESUMED by user via dashboard.")
+    return {"status": "active", "message": "Trading resumed. System will place orders on valid signals."}
+
+@app.get("/api/trading-paused")
+def get_pause_state():
+    return {"paused": _trading_paused}
+
+
+# ---------------------------------------------------------------
+# FEATURE 2: Manual Close — mark an open trade as closed in DB
+# ---------------------------------------------------------------
+@app.post("/api/trades/{trade_id}/manual-close")
+def manual_close_trade(trade_id: int, data: dict, db: Session = Depends(get_db)):
+    """
+    Marks an OPEN trade as manually closed in the system DB.
+    Call this after you square off a position directly in your broker app
+    so the system stops trying to manage or re-exit that trade.
+    Body: { "exit_price": 123.45 }  (the premium you exited at, optional — defaults to entry price)
+    """
+    trade = db.query(Trade).filter(Trade.id == trade_id).first()
+    if not trade:
+        raise HTTPException(status_code=404, detail=f"Trade ID {trade_id} not found.")
+    if trade.status != "OPEN":
+        raise HTTPException(status_code=400, detail=f"Trade ID {trade_id} is already closed (status: {trade.status}).")
+
+    exit_price = float(data.get("exit_price", trade.entry_price))
+    qty = trade.lots * settings.NIFTY_LOT_SIZE
+    pnl = (exit_price - trade.entry_price) * qty
+
+    trade.exit_price = exit_price
+    trade.exit_time = datetime.utcnow()
+    trade.status = "CLOSED_MANUAL"
+    trade.pnl = pnl
+
+    daily_state = db.query(DailyState).filter(
+        DailyState.trade_date == date.today().strftime("%Y-%m-%d")
+    ).first()
+    if daily_state:
+        daily_state.realized_pnl += pnl
+
+    db.commit()
+    logger.info(f"Trade ID {trade_id} manually closed via dashboard. Exit price: {exit_price}, PNL: ₹{pnl:.2f}")
+    return {
+        "status": "success",
+        "message": f"Trade {trade_id} marked as CLOSED_MANUAL. System will no longer manage this position.",
+        "pnl": round(pnl, 2)
+    }
+
+
+# ---------------------------------------------------------------
+# FEATURE 3: Keepalive ping endpoint (prevents Render free tier sleep)
+# ---------------------------------------------------------------
+@app.get("/ping")
+def ping():
+    """Lightweight keepalive endpoint. Hit this every 10 minutes to prevent Render free tier sleep."""
+    return {"pong": True, "ts": datetime.utcnow().isoformat()}
 
 
 @app.get("/health")

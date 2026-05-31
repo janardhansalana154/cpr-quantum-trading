@@ -361,6 +361,127 @@ export default function App() {
     }
   };
 
+  // =========================================================
+  // FEATURE 1: Pause / Resume Trading
+  // =========================================================
+  const [tradingPaused, setTradingPaused] = useState<boolean>(false);
+  const [pauseLoading, setPauseLoading] = useState(false);
+
+  // =========================================================
+  // FEATURE 3: Keepalive Setup Wizard state
+  // =========================================================
+  const [showKeepaliveSetup, setShowKeepaliveSetup] = useState(false);
+  const [uptimeRobotKey, setUptimeRobotKey] = useState("");
+  const [renderUrl, setRenderUrl] = useState("https://cpr-quantum-trading-1.onrender.com");
+  const [keepaliveSetupStatus, setKeepaliveSetupStatus] = useState<null | "loading" | "success" | "error">(null);
+  const [keepaliveSetupMsg, setKeepaliveSetupMsg] = useState("");
+
+  const handleCreateUptimeMonitor = async () => {
+    if (!uptimeRobotKey.trim() || !renderUrl.trim()) {
+      setKeepaliveSetupMsg("Both fields are required.");
+      setKeepaliveSetupStatus("error");
+      return;
+    }
+    const cleanUrl = renderUrl.trim().replace(/\/$/, "") + "/ping";
+    setKeepaliveSetupStatus("loading");
+    setKeepaliveSetupMsg("Creating monitor on UptimeRobot...");
+    try {
+      // UptimeRobot v2 API — newMonitor
+      const params = new URLSearchParams({
+        api_key: uptimeRobotKey.trim(),
+        format: "json",
+        type: "1",          // HTTP monitor
+        url: cleanUrl,
+        friendly_name: "CPR Quantum Trading - Keepalive",
+        interval: "300",    // every 5 minutes
+      });
+      const res = await fetch("https://api.uptimerobot.com/v2/newMonitor", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded", "Cache-Control": "no-cache" },
+        body: params.toString(),
+      });
+      const data = await res.json();
+      if (data.stat === "ok") {
+        setKeepaliveSetupStatus("success");
+        setKeepaliveSetupMsg(`✅ Monitor created! UptimeRobot will ping ${cleanUrl} every 5 minutes. Your Render server will never sleep.`);
+        addLog("SUCCESS", `🔄 UptimeRobot keepalive monitor created for ${cleanUrl}. Server will stay awake 24/7.`);
+      } else {
+        const errMsg = data.error?.message || JSON.stringify(data.error) || "Unknown error";
+        setKeepaliveSetupStatus("error");
+        setKeepaliveSetupMsg(`❌ UptimeRobot error: ${errMsg}`);
+        addLog("ERROR", `❌ UptimeRobot monitor creation failed: ${errMsg}`);
+      }
+    } catch (e: any) {
+      setKeepaliveSetupStatus("error");
+      setKeepaliveSetupMsg(`❌ Network error: ${e?.message}. Note: UptimeRobot API may block browser requests due to CORS. If so, create the monitor manually at uptimerobot.com — use URL: ${cleanUrl}`);
+      addLog("WARNING", `⚠️ Could not auto-create monitor. Create manually at uptimerobot.com with URL: ${cleanUrl}`);
+    }
+  };
+
+  const fetchPauseState = async () => {
+    try {
+      const res = await fetch("/api/trading-paused");
+      if (res.ok) {
+        const data = await res.json();
+        setTradingPaused(data.paused);
+      }
+    } catch {}
+  };
+
+  const handleTogglePause = async () => {
+    setPauseLoading(true);
+    try {
+      const endpoint = tradingPaused ? "/api/resume-trading" : "/api/pause-trading";
+      const res = await fetch(endpoint, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setTradingPaused(data.status === "paused");
+        addLog(tradingPaused ? "SUCCESS" : "WARNING",
+          tradingPaused ? "▶️ Trading RESUMED. Bot will place orders on valid signals." : "⏸️ Trading PAUSED. Bot will detect signals but NOT place any orders.");
+      }
+    } catch (e: any) {
+      addLog("ERROR", `Failed to toggle pause: ${e?.message}`);
+    } finally {
+      setPauseLoading(false);
+    }
+  };
+
+  // =========================================================
+  // FEATURE 2: Manual Close Trade
+  // =========================================================
+  const [manualCloseTradeId, setManualCloseTradeId] = useState<string | null>(null);
+  const [manualExitPrice, setManualExitPrice] = useState<string>("");
+  const [manualCloseLoading, setManualCloseLoading] = useState(false);
+
+  const handleManualClose = async () => {
+    if (!manualCloseTradeId) return;
+    const numericId = manualCloseTradeId.replace("P-", "");
+    setManualCloseLoading(true);
+    try {
+      const body: Record<string, number> = {};
+      if (manualExitPrice.trim()) body.exit_price = parseFloat(manualExitPrice);
+      const res = await fetch(`/api/trades/${numericId}/manual-close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        addLog("SUCCESS", `✅ Trade ${manualCloseTradeId} manually marked as CLOSED. PNL: ₹${data.pnl}`);
+        setManualCloseTradeId(null);
+        setManualExitPrice("");
+        fetchRecentTrades();
+        fetchLiveStatus();
+      } else {
+        addLog("ERROR", `❌ Manual close failed: ${data.detail || JSON.stringify(data)}`);
+      }
+    } catch (e: any) {
+      addLog("ERROR", `❌ Manual close error: ${e?.message}`);
+    } finally {
+      setManualCloseLoading(false);
+    }
+  };
+
   const fetchRecentTrades = async () => {
     try {
       const res = await fetch('/api/trades');
@@ -510,7 +631,7 @@ export default function App() {
     s1: 19413.33,
   });
 
-  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "broker" | "help">("cockpit");
+  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "broker" | "help" | "server">("cockpit");
   // Prefer backend trades; fall back to demo trades if backend returns none.
   const [trades, setTrades] = useState<SimulatedTrade[]>([]);
 
@@ -585,6 +706,16 @@ export default function App() {
     const liveStatusTimer = setInterval(fetchLiveStatus, 10_000);
     // Poll trades every 30 seconds
     const tradesTimer = setInterval(fetchRecentTrades, 30_000);
+    // Poll pause state every 15 seconds
+    fetchPauseState();
+    const pauseTimer = setInterval(fetchPauseState, 15_000);
+    // FEATURE 3: Keepalive ping every 8 minutes to prevent Render free tier sleep
+    const keepaliveTimer = setInterval(async () => {
+      try {
+        await fetch("https://cpr-quantum-trading-1.onrender.com/ping");
+        addLog("INFO", "🔄 Keepalive ping sent to prevent server sleep.");
+      } catch {}
+    }, 8 * 60 * 1000);
 
     // Check url query params for OAuth return success redirect (standard redirection fallback)
     const urlParams = new URLSearchParams(window.location.search);
@@ -613,6 +744,8 @@ export default function App() {
       window.removeEventListener("message", handleOAuthMessage);
       clearInterval(liveStatusTimer);
       clearInterval(tradesTimer);
+      clearInterval(pauseTimer);
+      clearInterval(keepaliveTimer);
     };
   }, []);
 
@@ -830,6 +963,12 @@ export default function App() {
           >
             Docs
           </button>
+          <button 
+            onClick={() => setActiveTab("server")}
+            className={`px-4 py-1.5 rounded text-xs font-bold font-mono transition-all uppercase tracking-wider cursor-pointer ${activeTab === "server" ? "bg-indigo-600 text-white font-bold" : "text-slate-400 hover:text-white"}`}
+          >
+            Server
+          </button>
         </div>
 
         <div className="flex gap-6 items-center select-none">
@@ -854,6 +993,22 @@ export default function App() {
               }`}
             >
               {tradingMode === "live" ? "⚠️ Live Trading" : "Paper Trading"}
+            </button>
+          </div>
+          {/* PAUSE / RESUME BUTTON */}
+          <div className="flex flex-col items-center">
+            <span className="text-[10px] text-slate-500 uppercase font-bold font-mono">Orders</span>
+            <button
+              onClick={handleTogglePause}
+              disabled={pauseLoading}
+              className={`mt-0.5 px-3 py-1 rounded text-xs font-bold font-mono uppercase tracking-wider cursor-pointer border transition-all disabled:opacity-50 ${
+                tradingPaused
+                  ? "bg-amber-500/20 border-amber-500 text-amber-400 hover:bg-amber-500/30"
+                  : "bg-emerald-500/20 border-emerald-500 text-emerald-400 hover:bg-emerald-500/30"
+              }`}
+              title={tradingPaused ? "Click to resume — bot will place orders again" : "Click to pause — bot will NOT place any orders"}
+            >
+              {pauseLoading ? "..." : tradingPaused ? "⏸ PAUSED" : "▶ ACTIVE"}
             </button>
           </div>
           <div className="flex flex-col items-end border-l border-slate-800 pl-6 h-10 justify-center">
@@ -1783,6 +1938,153 @@ export default function App() {
               </div>
             </div>
           )}
+
+
+          {activeTab === "server" && (
+            <div className="flex flex-col gap-6 p-6 max-w-2xl">
+
+              {/* Section 1 - Pause / Resume */}
+              <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
+                <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider font-mono border-b border-slate-700 pb-3 flex items-center gap-2">
+                  <span className="text-xl">⏸</span> Trade Execution Control
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Use this to pause the bot from placing any orders — for example on days you don't want to trade, or when market conditions are uncertain.
+                  The strategy engine keeps running and detecting signals, but <span className="text-amber-400 font-bold">no orders will be sent to Upstox</span> while paused.
+                </p>
+                <div className={`rounded-lg border p-4 flex items-center justify-between ${tradingPaused ? "bg-amber-500/10 border-amber-500/50" : "bg-emerald-500/10 border-emerald-500/50"}`}>
+                  <div>
+                    <div className={`text-sm font-bold font-mono ${tradingPaused ? "text-amber-400" : "text-emerald-400"}`}>
+                      {tradingPaused ? "⏸  ORDERS PAUSED" : "▶  ORDERS ACTIVE"}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      {tradingPaused
+                        ? "Bot is detecting signals but will NOT place any orders."
+                        : "Bot will place orders when a valid setup triggers."}
+                    </div>
+                  </div>
+                  <button
+                    onClick={handleTogglePause}
+                    disabled={pauseLoading}
+                    className={`px-5 py-2.5 rounded-lg text-xs font-bold font-mono uppercase tracking-wider cursor-pointer border transition-all disabled:opacity-50 ${
+                      tradingPaused
+                        ? "bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500"
+                        : "bg-amber-600 border-amber-500 text-white hover:bg-amber-500"
+                    }`}
+                  >
+                    {pauseLoading ? "..." : tradingPaused ? "▶  Resume Trading" : "⏸  Pause Trading"}
+                  </button>
+                </div>
+                <div className="text-[11px] text-slate-500 bg-slate-900 border border-slate-800 rounded p-3 font-mono">
+                  <span className="text-slate-400 font-bold">Tip:</span> You can also use the <span className="text-indigo-400">▶ ACTIVE / ⏸ PAUSED</span> button in the top header bar for quick access at any time.
+                </div>
+              </div>
+
+              {/* Section 2 - Manual Close */}
+              <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
+                <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider font-mono border-b border-slate-700 pb-3 flex items-center gap-2">
+                  <span className="text-xl">📋</span> Manual Trade Close
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  If you squared off a trade directly in your <span className="text-white font-bold">Upstox app</span>, the bot's database still thinks the trade is OPEN and will try to exit it again — which can cause errors.
+                  Use the <span className="text-orange-400 font-bold">📋 Mark as Manually Closed</span> button on any OPEN trade card in the <span className="text-white font-bold">Positions Ledger</span> (right panel) to fix this instantly.
+                </p>
+                <div className="rounded-lg border border-slate-700 bg-slate-950 p-4 text-[11px] font-mono text-slate-400 space-y-2">
+                  <div className="text-slate-300 font-bold mb-2">Step by step:</div>
+                  <div>1. Square off your position in Upstox app as usual.</div>
+                  <div>2. Come back to this dashboard.</div>
+                  <div>3. In the <span className="text-indigo-400">Positions Ledger</span> (right side panel), find the OPEN trade.</div>
+                  <div>4. Click <span className="text-orange-400 font-bold">📋 Mark as Manually Closed</span>.</div>
+                  <div>5. Enter the premium you exited at (optional). Click <span className="text-emerald-400 font-bold">✓ CONFIRM CLOSE</span>.</div>
+                  <div className="text-amber-400 mt-2">⚠ Do this as soon as possible after manual square-off to prevent double-exit attempts.</div>
+                </div>
+              </div>
+
+              {/* Section 3 - Keepalive / UptimeRobot Setup */}
+              <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-5 flex flex-col gap-4">
+                <h3 className="text-sm font-bold text-slate-100 uppercase tracking-wider font-mono border-b border-slate-700 pb-3 flex items-center gap-2">
+                  <span className="text-xl">🔄</span> 24/7 Server Keepalive Setup
+                </h3>
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Render's free plan <span className="text-rose-400 font-bold">shuts down your server after 15 minutes of no traffic</span> — meaning the bot stops watching the market.
+                  Fix this permanently by setting up a free <span className="text-white font-bold">UptimeRobot</span> monitor that pings your server every 5 minutes.
+                </p>
+
+                {/* Render URL display */}
+                <div className="flex flex-col gap-1">
+                  <div className="text-[11px] text-slate-400 font-mono font-bold uppercase tracking-wider">Your Render Ping URL</div>
+                  <div className="flex items-center gap-2 bg-slate-950 border border-emerald-700/50 rounded-lg px-3 py-2.5">
+                    <span className="text-emerald-400 font-mono text-xs flex-1 break-all">{PING_URL}</span>
+                    <button
+                      onClick={() => {{ navigator.clipboard.writeText("{PING_URL}"); addLog("INFO", "📋 Ping URL copied to clipboard."); }}}
+                      className="text-[10px] text-slate-400 hover:text-white border border-slate-700 rounded px-2 py-1 font-mono cursor-pointer hover:bg-slate-800 shrink-0"
+                    >Copy</button>
+                  </div>
+                  <div className="text-[10px] text-slate-600">This endpoint is live on your server. It responds instantly with a pong.</div>
+                </div>
+
+                {/* Step by step guide */}
+                <div className="rounded-lg border border-slate-700 bg-slate-950 p-4 text-[11px] font-mono text-slate-400 space-y-1.5">
+                  <div className="text-slate-300 font-bold mb-2">How to set up UptimeRobot (takes 2 minutes, free forever):</div>
+                  <div>1. Go to <a href="https://uptimerobot.com" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline cursor-pointer">uptimerobot.com</a> → Create a free account.</div>
+                  <div>2. Click <span className="text-white">"Add New Monitor"</span>.</div>
+                  <div>3. Monitor Type: <span className="text-emerald-400">HTTP(s)</span></div>
+                  <div>4. Friendly Name: <span className="text-emerald-400">CPR Quantum Keepalive</span></div>
+                  <div>5. URL: paste the ping URL above → <span className="text-emerald-400 break-all">{PING_URL}</span></div>
+                  <div>6. Monitoring Interval: <span className="text-emerald-400">5 minutes</span></div>
+                  <div>7. Click <span className="text-white">"Create Monitor"</span>. Done ✅</div>
+                </div>
+
+                {/* Auto-setup via API key */}
+                <div className="border border-indigo-700/40 bg-indigo-950/20 rounded-lg p-4 flex flex-col gap-3">
+                  <div className="text-xs font-bold text-indigo-300 font-mono uppercase tracking-wider">⚡ One-Click Auto Setup (optional)</div>
+                  <p className="text-[11px] text-slate-400">
+                    If you already have a UptimeRobot account, enter your API key below and we'll create the monitor automatically.
+                    Get your API key from: <a href="https://dashboard.uptimerobot.com/integrations" target="_blank" rel="noopener noreferrer" className="text-indigo-400 underline">dashboard.uptimerobot.com/integrations</a>
+                  </p>
+                  <div className="flex flex-col gap-2">
+                    <input
+                      type="text"
+                      placeholder="UptimeRobot API Key (starts with u123456-...)"
+                      value={uptimeRobotKey}
+                      onChange={e => setUptimeRobotKey(e.target.value)}
+                      className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-indigo-500"
+                    />
+                    <div className="flex flex-col gap-1">
+                      <div className="text-[10px] text-slate-500 font-mono">Render URL (pre-filled)</div>
+                      <input
+                        type="text"
+                        value={renderUrl}
+                        onChange={e => setRenderUrl(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <button
+                      onClick={handleCreateUptimeMonitor}
+                      disabled={keepaliveSetupStatus === "loading" || !uptimeRobotKey.trim()}
+                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 border border-indigo-500 text-white text-xs font-bold font-mono uppercase tracking-wider rounded-lg cursor-pointer transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      {keepaliveSetupStatus === "loading" ? "Creating monitor..." : "🔄 Create UptimeRobot Monitor"}
+                    </button>
+                    {keepaliveSetupStatus === "success" && (
+                      <div className="text-[11px] text-emerald-400 font-mono bg-emerald-900/20 border border-emerald-700/40 rounded p-2.5">{keepaliveSetupMsg}</div>
+                    )}
+                    {keepaliveSetupStatus === "error" && (
+                      <div className="text-[11px] text-rose-400 font-mono bg-rose-900/20 border border-rose-700/40 rounded p-2.5">{keepaliveSetupMsg}</div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Current status */}
+                <div className="flex items-center gap-3 text-[11px] font-mono text-slate-500 border border-slate-800 rounded-lg p-3 bg-slate-950">
+                  <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0"></div>
+                  <span>Dashboard keepalive: <span className="text-emerald-400 font-bold">ACTIVE</span> — browser tab pings server every 8 min while open.</span>
+                </div>
+              </div>
+
+            </div>
+          )}
+
         </section>
 
         {/* Right Rail: Risk Management & Logs */}
@@ -1844,7 +2146,7 @@ export default function App() {
                       <div className="text-slate-500 font-bold text-right">LTP: <span className="text-slate-300">{trade.exitPrice !== null ? `₹${trade.exitPrice}` : "--"}</span></div>
                     </div>
                     <div className="flex justify-between items-center mt-2 pt-1.5 border-t border-slate-800/40 text-[10px]">
-                      <span className={`font-bold ${trade.status === 'OPEN' ? 'text-indigo-400 animate-pulse' : trade.status === 'CLOSED_TP' ? 'text-emerald-400 font-bold' : 'text-rose-500'}`}>
+                      <span className={`font-bold ${trade.status === 'OPEN' ? 'text-indigo-400 animate-pulse' : trade.status === 'CLOSED_TP' ? 'text-emerald-400 font-bold' : trade.status === 'CLOSED_MANUAL' ? 'text-orange-400 font-bold' : 'text-rose-500'}`}>
                         {trade.status}
                       </span>
                       {trade.status !== "OPEN" && (
@@ -1853,6 +2155,46 @@ export default function App() {
                         </span>
                       )}
                     </div>
+                    {/* MANUAL CLOSE BUTTON — only for OPEN trades */}
+                    {trade.status === "OPEN" && (
+                      <div className="mt-2 pt-1.5 border-t border-slate-700/50">
+                        {manualCloseTradeId === trade.id ? (
+                          <div className="flex flex-col gap-1.5">
+                            <div className="text-[9px] text-amber-400 font-bold font-mono">Enter exit premium (optional):</div>
+                            <input
+                              type="number"
+                              placeholder="Exit premium ₹ (optional)"
+                              value={manualExitPrice}
+                              onChange={e => setManualExitPrice(e.target.value)}
+                              className="w-full bg-slate-800 border border-slate-600 rounded px-2 py-1 text-[10px] font-mono text-slate-200 placeholder-slate-600 outline-none focus:border-amber-500"
+                            />
+                            <div className="flex gap-1.5">
+                              <button
+                                onClick={handleManualClose}
+                                disabled={manualCloseLoading}
+                                className="flex-1 py-1 bg-amber-500/20 border border-amber-500 text-amber-400 text-[9px] font-bold font-mono rounded cursor-pointer hover:bg-amber-500/30 disabled:opacity-50"
+                              >
+                                {manualCloseLoading ? "Closing..." : "✓ CONFIRM CLOSE"}
+                              </button>
+                              <button
+                                onClick={() => { setManualCloseTradeId(null); setManualExitPrice(""); }}
+                                className="px-2 py-1 bg-slate-800 border border-slate-600 text-slate-400 text-[9px] font-bold font-mono rounded cursor-pointer hover:bg-slate-700"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => setManualCloseTradeId(trade.id)}
+                            className="w-full py-1 bg-orange-500/10 border border-orange-500/40 text-orange-400 text-[9px] font-bold font-mono rounded cursor-pointer hover:bg-orange-500/20 transition-all"
+                            title="Use this if you already squared off this trade manually in Upstox"
+                          >
+                            📋 Mark as Manually Closed
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))
               )}
@@ -1911,7 +2253,10 @@ export default function App() {
         <div className="flex gap-4">
           <span>CPU: 12%</span>
           <span>MEM: 1.2GB</span>
-          <span className="text-emerald-400 animate-pulse font-bold flex items-center gap-1">● SYSTEM PULSE OK</span>
+          <span className={`animate-pulse font-bold flex items-center gap-1 ${tradingPaused ? "text-amber-400" : "text-emerald-400"}`}>
+            ● {tradingPaused ? "ORDERS PAUSED" : "SYSTEM PULSE OK"}
+          </span>
+          <span className="text-slate-600">KEEPALIVE: ACTIVE</span>
         </div>
       </footer>
     </div>
