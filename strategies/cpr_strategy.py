@@ -155,7 +155,7 @@ class SetupStateMachine:
                             _sl = self.r_high + settings.SL_BUFFER
                             _entry = cl
                             _risk  = abs(_entry - _sl)          # points at risk
-                            _tp    = _entry - (2.0 * _risk)     # 1:2 RR target
+                            _tp    = _entry - (settings.REWARD_RATIO * _risk)   # configurable RR
                             order_details = {
                                 "setup_name": "SETUP_A",
                                 "trade_type": "SELL",  # Short direction
@@ -229,7 +229,7 @@ class SetupStateMachine:
                             _sl = self.r_low - settings.SL_BUFFER
                             _entry = cl
                             _risk  = abs(_entry - _sl)
-                            _tp    = _entry + (2.0 * _risk)     # 1:2 RR target
+                            _tp    = _entry + (settings.REWARD_RATIO * _risk)   # configurable RR
                             order_details = {
                                 "setup_name": "SETUP_B",
                                 "trade_type": "BUY",  # Long direction
@@ -303,7 +303,7 @@ class SetupStateMachine:
                             _sl = self.r_low - settings.SL_BUFFER
                             _entry = cl
                             _risk  = abs(_entry - _sl)
-                            _tp    = _entry + (2.0 * _risk)     # 1:2 RR target
+                            _tp    = _entry + (settings.REWARD_RATIO * _risk)   # configurable RR
                             order_details = {
                                 "setup_name": "SETUP_C",
                                 "trade_type": "BUY",  # Long direction
@@ -377,7 +377,7 @@ class SetupStateMachine:
                             _sl = self.r_high + settings.SL_BUFFER
                             _entry = cl
                             _risk  = abs(_entry - _sl)
-                            _tp    = _entry - (2.0 * _risk)     # 1:2 RR target
+                            _tp    = _entry - (settings.REWARD_RATIO * _risk)   # configurable RR
                             order_details = {
                                 "setup_name": "SETUP_D",
                                 "trade_type": "SELL",  # Short direction

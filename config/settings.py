@@ -27,7 +27,8 @@ class Settings(BaseSettings):
     ENTRY_TRIGGER_WINDOW: int = Field(default=10, ge=1)
     RETEST_TOLERANCE: float = Field(default=5.0, ge=0.0)
     SL_BUFFER: float = Field(default=3.0, ge=0.0)
-    TARGET_BUFFER: float = Field(default=3.0, ge=0.0)
+    TARGET_BUFFER: float  = Field(default=3.0, ge=0.0)
+    REWARD_RATIO:  float  = Field(default=2.0, ge=0.5, description="Risk:Reward multiplier. 2.0 = 1:2 RR, 1.5 = 1:1.5 RR, 3.0 = 1:3 RR")
     
     # Risk settings
     DAILY_LOSS_LIMIT: float = Field(default=2000.0, description="Daily Stop-Loss limit in currency units (INR)")
@@ -91,7 +92,8 @@ except Exception as e:
         ENTRY_TRIGGER_WINDOW = int(os.environ.get("ENTRY_TRIGGER_WINDOW", 10))
         RETEST_TOLERANCE = float(os.environ.get("RETEST_TOLERANCE", 5.0))
         SL_BUFFER = float(os.environ.get("SL_BUFFER", 3.0))
-        TARGET_BUFFER = float(os.environ.get("TARGET_BUFFER", 3.0))
+        TARGET_BUFFER  = float(os.environ.get("TARGET_BUFFER", 3.0))
+        REWARD_RATIO   = float(os.environ.get("REWARD_RATIO", 2.0))
         DAILY_LOSS_LIMIT        = float(os.environ.get("DAILY_LOSS_LIMIT", 2000.0))
         NO_ENTRY_AFTER_HOUR     = int(os.environ.get("NO_ENTRY_AFTER_HOUR", 14))
         NO_ENTRY_AFTER_MIN      = int(os.environ.get("NO_ENTRY_AFTER_MIN", 0))
