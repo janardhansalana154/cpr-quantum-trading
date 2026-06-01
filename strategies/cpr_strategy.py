@@ -152,12 +152,16 @@ class SetupStateMachine:
                         inside = is_inside_cpr(cl, levels)
                         if not inside and cl > levels.tc:
                             trigger_entry = True
+                            _sl = self.r_high + settings.SL_BUFFER
+                            _entry = cl
+                            _risk  = abs(_entry - _sl)          # points at risk
+                            _tp    = _entry - (2.0 * _risk)     # 1:2 RR target
                             order_details = {
                                 "setup_name": "SETUP_A",
                                 "trade_type": "SELL",  # Short direction
                                 "trigger_price": lo,
-                                "stop_loss": self.r_high + settings.SL_BUFFER,
-                                "take_profit": levels.tc + settings.TARGET_BUFFER,
+                                "stop_loss": round(_sl, 2),
+                                "take_profit": round(_tp, 2),
                                 "lots": settings.POSITION_LOTS
                             }
                             logger.info(f"SETUP_A: Bar {idx} - ENTRY TRIGGERED. Low ({lo}) under Confirmation Low ({self.c_low}). SL={order_details['stop_loss']}, TP={order_details['take_profit']}")
@@ -222,12 +226,16 @@ class SetupStateMachine:
                         inside = is_inside_cpr(cl, levels)
                         if not inside and cl < levels.bc:
                             trigger_entry = True
+                            _sl = self.r_low - settings.SL_BUFFER
+                            _entry = cl
+                            _risk  = abs(_entry - _sl)
+                            _tp    = _entry + (2.0 * _risk)     # 1:2 RR target
                             order_details = {
                                 "setup_name": "SETUP_B",
                                 "trade_type": "BUY",  # Long direction
                                 "trigger_price": hi,
-                                "stop_loss": self.r_low - settings.SL_BUFFER,
-                                "take_profit": levels.bc - settings.TARGET_BUFFER,
+                                "stop_loss": round(_sl, 2),
+                                "take_profit": round(_tp, 2),
                                 "lots": settings.POSITION_LOTS
                             }
                             logger.info(f"SETUP_B: Bar {idx} - ENTRY TRIGGERED. High ({hi}) above Confirmation High ({self.c_high}). SL={order_details['stop_loss']}, TP={order_details['take_profit']}")
@@ -292,12 +300,16 @@ class SetupStateMachine:
                         inside = is_inside_cpr(cl, levels)
                         if not inside and cl > levels.tc:
                             trigger_entry = True
+                            _sl = self.r_low - settings.SL_BUFFER
+                            _entry = cl
+                            _risk  = abs(_entry - _sl)
+                            _tp    = _entry + (2.0 * _risk)     # 1:2 RR target
                             order_details = {
                                 "setup_name": "SETUP_C",
                                 "trade_type": "BUY",  # Long direction
                                 "trigger_price": hi,
-                                "stop_loss": self.r_low - settings.SL_BUFFER,
-                                "take_profit": levels.r1 - settings.TARGET_BUFFER,
+                                "stop_loss": round(_sl, 2),
+                                "take_profit": round(_tp, 2),
                                 "lots": settings.POSITION_LOTS
                             }
                             logger.info(f"SETUP_C: Bar {idx} - ENTRY TRIGGERED. High ({hi}) above Confirmation High ({self.c_high}). SL={order_details['stop_loss']}, TP={order_details['take_profit']}")
@@ -362,12 +374,16 @@ class SetupStateMachine:
                         inside = is_inside_cpr(cl, levels)
                         if not inside and cl < levels.bc:
                             trigger_entry = True
+                            _sl = self.r_high + settings.SL_BUFFER
+                            _entry = cl
+                            _risk  = abs(_entry - _sl)
+                            _tp    = _entry - (2.0 * _risk)     # 1:2 RR target
                             order_details = {
                                 "setup_name": "SETUP_D",
                                 "trade_type": "SELL",  # Short direction
                                 "trigger_price": lo,
-                                "stop_loss": self.r_high + settings.SL_BUFFER,
-                                "take_profit": levels.s1 + settings.TARGET_BUFFER,
+                                "stop_loss": round(_sl, 2),
+                                "take_profit": round(_tp, 2),
                                 "lots": settings.POSITION_LOTS
                             }
                             logger.info(f"SETUP_D: Bar {idx} - ENTRY TRIGGERED. Low ({lo}) under Confirmation Low ({self.c_low}). SL={order_details['stop_loss']}, TP={order_details['take_profit']}")

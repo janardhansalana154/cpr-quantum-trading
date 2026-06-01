@@ -1,6 +1,7 @@
 import os
 import logging
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timezone, timedelta
+_IST = timezone(timedelta(hours=5, minutes=30)), timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -147,15 +148,35 @@ def check_active_position_targets():
     if upstox is None:
         return
 
-    mkt = get_market_status_detail()
-    if not mkt["market_open"]:
-        return
-
     from database.db import SessionLocal
+    from datetime import timezone, timedelta
+    _IST = timezone(timedelta(hours=5, minutes=30))
+    now_ist = datetime.now(_IST)
+
     db = SessionLocal()
     try:
         open_trade = db.query(Trade).filter(Trade.status == "OPEN").first()
+
+        # ── CHANGE 5: Force squareoff at 3 PM IST ──
+        squareoff_cutoff = now_ist.replace(
+            hour=settings.SQUAREOFF_HOUR, minute=settings.SQUAREOFF_MIN,
+            second=0, microsecond=0
+        )
+        if now_ist >= squareoff_cutoff and open_trade:
+            ltp = upstox.get_nifty_price()
+            exit_price = ltp if ltp else open_trade.entry_price
+            rm = RiskManager(db)
+            closed = rm.register_trade_exit(open_trade.id, exit_price, "CLOSED_EOD")
+            if closed:
+                upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
+                logger.warning(f"[EOD SQUAREOFF] Trade {open_trade.id} force-closed at {settings.SQUAREOFF_HOUR}:{settings.SQUAREOFF_MIN:02d} IST. Exit={exit_price}")
+            return
+
         if not open_trade:
+            return
+
+        mkt = get_market_status_detail()
+        if not mkt["market_open"]:
             return
 
         ltp = upstox.get_nifty_price()
@@ -163,6 +184,27 @@ def check_active_position_targets():
             logger.warning("[CMP_SOURCE=DISCONNECTED] Cannot check SL/TP — no live LTP.")
             return
 
+        # ── CHANGE 1: Live daily loss-limit squareoff ──
+        rm_check = RiskManager(db)
+        day_state = rm_check.get_or_create_daily_state()
+        qty = open_trade.lots * 75
+        if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:  # Long / CE
+            unrealised = (ltp - open_trade.entry_price) * qty
+        else:                                                   # Short / PE
+            unrealised = (open_trade.entry_price - ltp) * qty
+        total_day_pnl = day_state.realized_pnl + unrealised
+        if total_day_pnl <= -settings.DAILY_LOSS_LIMIT:
+            closed = rm_check.register_trade_exit(open_trade.id, ltp, "CLOSED_SL_LIMIT")
+            if closed:
+                upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
+                logger.warning(
+                    f"[LOSS LIMIT] Trade {open_trade.id} force-closed. "
+                    f"Day P&L ₹{total_day_pnl:.2f} breached ₹{-settings.DAILY_LOSS_LIMIT:.2f}"
+                )
+                notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(unrealised), total_day_pnl)
+            return
+
+        # Normal SL / TP check
         is_sl = is_tp = False
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
             is_sl = ltp <= open_trade.stop_loss
@@ -274,6 +316,23 @@ def monitor_interval_tick():
                     continue
 
                 logger.info(f"[LIVE] {name} TRIGGERED | candle={latest_time} close={latest['close']}")
+
+                # ── No new entries after 2 PM IST ──
+                from datetime import timezone as _tz, timedelta as _td
+                _IST_tz = _tz(_td(hours=5, minutes=30))
+                _now_ist = datetime.now(_IST_tz)
+                _cutoff  = _now_ist.replace(
+                    hour=settings.NO_ENTRY_AFTER_HOUR,
+                    minute=settings.NO_ENTRY_AFTER_MIN,
+                    second=0, microsecond=0
+                )
+                if _now_ist >= _cutoff:
+                    logger.warning(
+                        f"[TIME CUTOFF] {name} signal at {_now_ist.strftime('%H:%M IST')} "
+                        f"rejected — no new entries after "
+                        f"{settings.NO_ENTRY_AFTER_HOUR:02d}:{settings.NO_ENTRY_AFTER_MIN:02d} IST."
+                    )
+                    continue
 
                 if not rm.can_trade():
                     continue

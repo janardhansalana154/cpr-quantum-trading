@@ -233,12 +233,32 @@ class UpstoxClient:
             db.close()
 
     def ensure_authenticated(self) -> bool:
-        """Load a valid token from DB and mark Upstox as live if available."""
+        """
+        Load a valid token from DB and mark Upstox as live if available.
+        Also proactively validates the token with a lightweight LTP call
+        to catch silent disconnections before the trading tick fires.
+        """
         token = self.get_token()
         if token is None:
             self.data_source = "DISCONNECTED"
             self.websocket_status = "Disconnected"
             return False
+
+        # Proactive validation: hit LTP endpoint to confirm token is still accepted
+        url = f"{self.base_url}/market-quote/ltp"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        params  = {"instrument_key": "NSE_INDEX|Nifty 50"}
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=5)
+            if resp.status_code == 401:
+                logger.warning("[KEEPALIVE] Token rejected by Upstox (401) during keepalive check. Clearing.")
+                self._clear_token()
+                self._invalidate_db_token()
+                self.data_source = "DISCONNECTED"
+                self.websocket_status = "Disconnected"
+                return False
+        except Exception:
+            pass  # Network blip — don't clear token, will retry next cycle
 
         self.data_source = "UPSTOX LIVE"
         self.websocket_status = "Connected"
@@ -370,6 +390,8 @@ class UpstoxClient:
                 logger.error("[TOKEN] Upstox rejected token (401). Clearing cache — re-authenticate.")
                 self._clear_token()
                 self._invalidate_db_token()
+                self.data_source = "DISCONNECTED"
+                self.websocket_status = "Disconnected — reconnect via dashboard"
                 return []
 
             else:

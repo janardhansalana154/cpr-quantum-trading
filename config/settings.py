@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     
     # Risk settings
     DAILY_LOSS_LIMIT: float = Field(default=2000.0, description="Daily Stop-Loss limit in currency units (INR)")
+    NO_ENTRY_AFTER_HOUR: int   = Field(default=14, description="No new entries after this IST hour (14 = 2 PM)")
+    NO_ENTRY_AFTER_MIN:  int   = Field(default=0,  description="No new entries after this IST minute")
+    SQUAREOFF_HOUR: int        = Field(default=15, description="Force square-off all positions at this IST hour (15 = 3 PM)")
+    SQUAREOFF_MIN:  int        = Field(default=0,  description="Force square-off at this IST minute")
     MAX_DAILY_TRADES: int = Field(default=2, description="Maximum number of trade executions allowed per day")
     POSITION_LOTS: int = Field(default=1, description="Number of lots to trade per order")
     
@@ -87,7 +91,11 @@ except Exception as e:
         RETEST_TOLERANCE = float(os.environ.get("RETEST_TOLERANCE", 5.0))
         SL_BUFFER = float(os.environ.get("SL_BUFFER", 3.0))
         TARGET_BUFFER = float(os.environ.get("TARGET_BUFFER", 3.0))
-        DAILY_LOSS_LIMIT = float(os.environ.get("DAILY_LOSS_LIMIT", 2000.0))
+        DAILY_LOSS_LIMIT        = float(os.environ.get("DAILY_LOSS_LIMIT", 2000.0))
+        NO_ENTRY_AFTER_HOUR     = int(os.environ.get("NO_ENTRY_AFTER_HOUR", 14))
+        NO_ENTRY_AFTER_MIN      = int(os.environ.get("NO_ENTRY_AFTER_MIN", 0))
+        SQUAREOFF_HOUR          = int(os.environ.get("SQUAREOFF_HOUR", 15))
+        SQUAREOFF_MIN           = int(os.environ.get("SQUAREOFF_MIN", 0))
         MAX_DAILY_TRADES = int(os.environ.get("MAX_DAILY_TRADES", 2))
         POSITION_LOTS = int(os.environ.get("POSITION_LOTS", 1))
     settings = FallbackSettings()

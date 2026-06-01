@@ -153,12 +153,50 @@ def run_backtest(
         day_realized_loss = 0.0   # track cumulative loss for daily limit
 
         for idx, candle in enumerate(candles):
+            # ── Time cutoff checks ──
+            candle_time_str = candle.get("time", "")
+            try:
+                candle_dt = datetime.fromisoformat(candle_time_str.replace("+05:30", ""))
+                candle_hour_min = candle_dt.hour * 60 + candle_dt.minute
+            except Exception:
+                candle_hour_min = 0
+
+            no_entry_cutoff = settings.NO_ENTRY_AFTER_HOUR * 60 + settings.NO_ENTRY_AFTER_MIN
+            squareoff_cutoff = settings.SQUAREOFF_HOUR * 60 + settings.SQUAREOFF_MIN
+
+            # ── 3 PM force squareoff ──
+            if candle_hour_min >= squareoff_cutoff and open_trade:
+                exit_price = candle["close"]
+                qty = NIFTY_LOT_SIZE
+                if open_trade["trade_type"] == "SELL":
+                    pnl = (open_trade["entry_price"] - exit_price) * qty
+                else:
+                    pnl = (exit_price - open_trade["entry_price"]) * qty
+                open_trade["exit_price"] = exit_price
+                open_trade["exit_time"]  = candle_time_str
+                open_trade["status"]     = "CLOSED_EOD"
+                open_trade["pnl"]        = round(pnl, 2)
+                day_realized_loss += pnl
+                open_trade = None
+                break
+
+            if candle_hour_min >= squareoff_cutoff:
+                break   # No more entries or processing after 3 PM
+
             # Only 1 open trade at a time
             if open_trade:
-                continue
+                # Check if this candle's time has passed the open trade's exit_time
+                if open_trade.get("exit_time") and candle_time_str >= open_trade["exit_time"]:
+                    open_trade = None
+                else:
+                    continue
 
             if trade_count >= max_trades_per_day:
                 break
+
+            # ── No new entries after 2 PM ──
+            if candle_hour_min >= no_entry_cutoff:
+                continue
 
             for name, sm in setups.items():
                 if open_trade:
@@ -211,10 +249,7 @@ def run_backtest(
                         f"Entry={entry_price} SL={sl} TP={tp} → {exit_info['status']} PNL=₹{exit_info['pnl']}"
                     )
 
-            # Clear open trade if it has exited before this candle's time
-            if open_trade and open_trade.get("exit_time"):
-                if candle["time"] >= open_trade["exit_time"]:
-                    open_trade = None
+            # open_trade clearance is handled at the top of the loop
 
         # Day summary
         day_pnl = sum(t["pnl"] for t in day_trades)
