@@ -429,15 +429,10 @@ export default function App() {
     pivot: 0, bc: 0, tc: 0, r1: 0, s1: 0,
   });
 
-  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "backtest" | "broker" | "help">("cockpit");
+  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "broker" | "help">("cockpit");
 
   const todayString = new Date().toISOString().slice(0, 10);
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const [backtestStartDate, setBacktestStartDate] = useState(sevenDaysAgo);
-  const [backtestEndDate, setBacktestEndDate] = useState(todayString);
-  const [backtestLoading, setBacktestLoading] = useState(false);
-  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
-  const [backtestError, setBacktestError] = useState<string | null>(null);
 
   // ── DEMO ONLY: trades shown in the demo player (never confused with real DB trades)
   const [demoTrades, setDemoTrades] = useState<SimulatedTrade[]>([]);
@@ -530,29 +525,6 @@ export default function App() {
     setSystemLogs([{ timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "[DEMO] Demo reset." }]);
   };
 
-  const handleRunBacktest = async () => {
-    setBacktestError(null);
-    setBacktestResult(null);
-    if (!backtestStartDate || !backtestEndDate) {
-      setBacktestError("Please select both a start and end date.");
-      return;
-    }
-
-    setBacktestLoading(true);
-    try {
-      const res = await fetch(`/api/backtest?start_date=${backtestStartDate}&end_date=${backtestEndDate}`);
-      if (!res.ok) {
-        const text = await res.text();
-        setBacktestError(`Backtest failed: ${res.status} ${text}`);
-      } else {
-        setBacktestResult(await res.json());
-      }
-    } catch (e: any) {
-      setBacktestError(`Network error: ${e?.message || e}`);
-    } finally {
-      setBacktestLoading(false);
-    }
-  };
 
   // Real trade count comes from backend, not from frontend simulation
   const realTradeCount = liveStatus.daily_summary?.trade_count ?? 0;
@@ -586,10 +558,10 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 p-0.5 bg-slate-950 rounded border border-slate-800">
-          {(["cockpit", "backtest", "stateMachines", "broker", "help"] as const).map(tab => (
+          {(["cockpit", "stateMachines", "broker", "help"] as const).map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded text-xs font-bold font-mono transition-all uppercase tracking-wider cursor-pointer ${activeTab === tab ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              {tab === "stateMachines" ? "Setups" : tab === "broker" ? "Upstox" : tab === "backtest" ? "Backtest" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === "stateMachines" ? "Setups" : tab === "broker" ? "Upstox" : tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -886,121 +858,7 @@ export default function App() {
             </div>
           )}
 
-          {activeTab === "backtest" && (
-            <div className="flex flex-col gap-6">
-              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5">
-                <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-800">
-                  <div>
-                    <h3 className="text-sm font-bold text-white">CPR Backtest Console</h3>
-                    <p className="text-[11px] text-slate-400 mt-1">Run historical Nifty 5-minute CPR backtests without affecting live execution.</p>
-                  </div>
-                  <button onClick={handleRunBacktest}
-                    className={`px-4 py-2 rounded uppercase text-xs font-bold tracking-wider ${backtestLoading ? "bg-slate-700 text-slate-200" : "bg-emerald-500 text-slate-950 hover:bg-emerald-400"}`}>
-                    {backtestLoading ? "Running…" : "Run Backtest"}
-                  </button>
-                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-5">
-                  <div className="space-y-2">
-                    <label className="text-[10px] uppercase tracking-widest text-slate-500">Start Date</label>
-                    <input type="date" value={backtestStartDate}
-                      onChange={e => setBacktestStartDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 text-sm" />
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] uppercase tracking-widest text-slate-500">End Date</label>
-                    <input type="date" value={backtestEndDate}
-                      onChange={e => setBacktestEndDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 text-sm" />
-                  </div>
-                </div>
-
-                {backtestError && (
-                  <div className="mt-4 rounded-lg border border-rose-500/40 bg-rose-950/20 p-3 text-slate-200 text-sm">
-                    {backtestError}
-                  </div>
-                )}
-              </div>
-
-              {backtestResult && (
-                <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 space-y-5">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-500">Period</p>
-                      <p className="mt-2 font-bold text-white text-sm">{backtestResult.period.start_date} → {backtestResult.period.end_date}</p>
-                    </div>
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-500">Covered Days</p>
-                      <p className="mt-2 font-bold text-white text-sm">{backtestResult.days_covered} / {backtestResult.days_requested}</p>
-                    </div>
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-500">Source</p>
-                      <p className="mt-2 font-bold text-white text-sm">{backtestResult.source}</p>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="bg-emerald-950/20 border border-emerald-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-emerald-300">Net P&L</p>
-                      <p className="mt-2 text-2xl font-bold text-emerald-300">₹{backtestResult.metrics.net_pnl.toFixed(2)}</p>
-                    </div>
-                    <div className="bg-sky-950/20 border border-sky-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-sky-300">Win Rate</p>
-                      <p className="mt-2 text-2xl font-bold text-sky-300">{backtestResult.metrics.win_rate.toFixed(2)}%</p>
-                    </div>
-                    <div className="bg-rose-950/20 border border-rose-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-rose-300">Total Trades</p>
-                      <p className="mt-2 text-2xl font-bold text-rose-300">{backtestResult.metrics.total_trades}</p>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4 text-sm space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Wins</span>
-                      <span className="text-white">{backtestResult.metrics.wins}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Losses</span>
-                      <span className="text-white">{backtestResult.metrics.losses}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Gross Profit</span>
-                      <span className="text-white">₹{backtestResult.metrics.gross_profit.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Gross Loss</span>
-                      <span className="text-white">₹{backtestResult.metrics.gross_loss.toFixed(2)}</span>
-                    </div>
-                  </div>
-
-                  <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
-                    <h4 className="text-xs uppercase tracking-widest text-slate-400 mb-3">Recent Backtest Trades</h4>
-                    <div className="grid grid-cols-1 gap-3">
-                      {backtestResult.trades.slice(0, 6).map((trade, idx) => (
-                        <div key={`${trade.entry_time}-${idx}`} className="p-3 rounded-lg border border-slate-800 bg-slate-950/70 text-sm">
-                          <div className="flex justify-between items-center">
-                            <span className="font-bold text-slate-100">{trade.setup_name}</span>
-                            <span className={`text-[11px] font-bold ${trade.pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>
-                              {trade.pnl >= 0 ? "+" : ""}₹{trade.pnl.toFixed(2)}
-                            </span>
-                          </div>
-                          <div className="mt-2 text-slate-400 text-[11px] grid grid-cols-2 gap-3">
-                            <div>Type: {trade.trade_type}</div>
-                            <div>Status: {trade.status}</div>
-                            <div>Entry: ₹{trade.entry_price.toFixed(2)}</div>
-                            <div>Exit: ₹{trade.exit_price.toFixed(2)}</div>
-                          </div>
-                        </div>
-                      ))}
-                      {backtestResult.trades.length === 0 && (
-                        <div className="rounded-lg border border-slate-800 p-4 text-slate-400 text-sm">No trades were generated for the selected period.</div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           {activeTab === "stateMachines" && (
             <div className="flex flex-col gap-6">

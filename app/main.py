@@ -15,6 +15,7 @@ from risk.manager import RiskManager
 from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupStateMachine, CPRLevels
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
 
+from reports.historical_report import generate_historical_report
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 
@@ -400,130 +401,6 @@ def get_system_status(db: Session = Depends(get_db)):
     }
 
 
-def _simulate_backtest_day(candles: List[Dict[str, Any]], levels: CPRLevels) -> List[Dict[str, Any]]:
-    setups = {
-        name: SetupStateMachine(name)
-        for name in ["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"]
-    }
-
-    trades: List[Dict[str, Any]] = []
-    open_trade: Optional[Dict[str, Any]] = None
-    qty = settings.POSITION_LOTS * 75
-
-    def _exit_trade(trade: Dict[str, Any], candle: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-        if trade["trade_type"] == "BUY":
-            if candle["low"] <= trade["stop_loss"]:
-                return {"exit_price": trade["stop_loss"], "status": "CLOSED_SL"}
-            if candle["high"] >= trade["take_profit"]:
-                return {"exit_price": trade["take_profit"], "status": "CLOSED_TP"}
-        else:
-            if candle["high"] >= trade["stop_loss"]:
-                return {"exit_price": trade["stop_loss"], "status": "CLOSED_SL"}
-            if candle["low"] <= trade["take_profit"]:
-                return {"exit_price": trade["take_profit"], "status": "CLOSED_TP"}
-        return None
-
-    for idx, candle in enumerate(candles):
-        if open_trade is not None:
-            exit_info = _exit_trade(open_trade, candle)
-            if exit_info is not None:
-                open_trade["exit_price"] = exit_info["exit_price"]
-                open_trade["exit_time"] = candle["time"]
-                open_trade["status"] = exit_info["status"]
-                open_trade["pnl"] = round((open_trade["exit_price"] - open_trade["entry_price"]) * qty, 2)
-                trades.append(open_trade)
-                open_trade = None
-
-        if open_trade is None:
-            for name, machine in setups.items():
-                triggered, details = machine.update(candle, idx, levels)
-                if triggered and details is not None:
-                    open_trade = {
-                        "setup_name": details["setup_name"],
-                        "trade_type": details["trade_type"],
-                        "entry_price": details["trigger_price"],
-                        "entry_time": candle["time"],
-                        "stop_loss": details["stop_loss"],
-                        "take_profit": details["take_profit"],
-                        "status": "OPEN",
-                        "exit_price": None,
-                        "exit_time": None,
-                        "pnl": 0.0,
-                    }
-                    break
-
-    if open_trade is not None:
-        last_candle = candles[-1]
-        open_trade["exit_price"] = last_candle["close"]
-        open_trade["exit_time"] = last_candle["time"]
-        open_trade["status"] = "CLOSED_EOD"
-        open_trade["pnl"] = round((open_trade["exit_price"] - open_trade["entry_price"]) * qty, 2)
-        trades.append(open_trade)
-
-    return trades
-
-
-@app.get("/api/backtest")
-def backtest_strategy(
-    start_date: date = Query(..., description="First inclusive date in YYYY-MM-DD format"),
-    end_date: date = Query(..., description="Last inclusive date in YYYY-MM-DD format"),
-    db: Session = Depends(get_db),
-):
-    if upstox is None:
-        raise HTTPException(status_code=503, detail="Server still initialising")
-    if not upstox._is_authenticated():
-        raise HTTPException(status_code=400, detail="Upstox authentication required for historical data")
-    if end_date < start_date:
-        raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
-    if (end_date - start_date).days > 30:
-        raise HTTPException(status_code=400, detail="Please request at most 30 days of historical data at once")
-
-    requested_days = []
-    current = start_date
-    while current <= end_date:
-        requested_days.append(current)
-        current += timedelta(days=1)
-
-    trades: List[Dict[str, Any]] = []
-    total_candles = 0
-    covered_days = 0
-
-    for trading_day in requested_days:
-        prev_ohlc = upstox.get_previous_day_ohlc_for_date(trading_day)
-        if prev_ohlc is None:
-            continue
-        levels = calculate_cpr_levels(prev_ohlc["high"], prev_ohlc["low"], prev_ohlc["close"])
-        day_candles = upstox.get_nifty_historical_5m_for_day(trading_day)
-        if not day_candles:
-            continue
-        covered_days += 1
-        total_candles += len(day_candles)
-        day_trades = _simulate_backtest_day(day_candles, levels)
-        trades.extend(day_trades)
-
-    wins = len([t for t in trades if t["pnl"] > 0])
-    losses = len([t for t in trades if t["pnl"] < 0])
-    gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
-    gross_loss = sum(t["pnl"] for t in trades if t["pnl"] < 0)
-    net_pnl = sum(t["pnl"] for t in trades)
-
-    return {
-        "period": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
-        "days_requested": len(requested_days),
-        "days_covered": covered_days,
-        "candles_count": total_candles,
-        "source": "UPSTOX_HISTORICAL",
-        "metrics": {
-            "total_trades": len(trades),
-            "win_rate": round((wins / len(trades)) * 100, 2) if trades else 0.0,
-            "wins": wins,
-            "losses": losses,
-            "gross_profit": round(gross_profit, 2),
-            "gross_loss": round(gross_loss, 2),
-            "net_pnl": round(net_pnl, 2),
-        },
-        "trades": trades,
-    }
 
 
 @app.get("/api/setups")
@@ -750,6 +627,21 @@ def debug_cpr(date: Optional[date] = Query(None, description="Target trading dat
 
     levels = calculate_cpr_levels(prev["high"], prev["low"], prev["close"])
     return {"previous_ohlc": prev, "cpr_levels": levels.dict()}
+
+
+@app.get("/api/report/historical")
+def historical_report(date: Optional[date] = Query(None, description="Target date YYYY-MM-DD"), db: Session = Depends(get_db)):
+    """
+    Return actual executed trades from the DB for the given date and aggregated metrics.
+    If `date` is omitted, defaults to today's date (UTC).
+    """
+    if date is None:
+        date = datetime.utcnow().date()
+    try:
+        report = generate_historical_report(date.isoformat(), db)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return report
 
 
 # ------------------------------------------------------------------
