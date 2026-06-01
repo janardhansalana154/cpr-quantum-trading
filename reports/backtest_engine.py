@@ -83,6 +83,7 @@ def run_backtest(
     end_date: date,
     upstox_client,
     max_trades_per_day: int = 2,
+    daily_loss_limit: float = None,
     failure_window: int = None,
     retest_window: int = None,
     confirm_window: int = None,
@@ -103,6 +104,7 @@ def run_backtest(
     rt  = retest_tol      if retest_tol is not None else settings.RETEST_TOLERANCE
     slb = sl_buffer       if sl_buffer  is not None else settings.SL_BUFFER
     tpb = tp_buffer       if tp_buffer  is not None else settings.TARGET_BUFFER
+    dll = daily_loss_limit if daily_loss_limit is not None else settings.DAILY_LOSS_LIMIT
 
     days = _trading_days(start_date, end_date)
     all_trades: List[Dict] = []
@@ -148,6 +150,7 @@ def run_backtest(
         day_trades: List[Dict] = []
         trade_count = 0
         open_trade: Optional[Dict] = None
+        day_realized_loss = 0.0   # track cumulative loss for daily limit
 
         for idx, candle in enumerate(candles):
             # Only 1 open trade at a time
@@ -163,6 +166,11 @@ def run_backtest(
                 triggered, details = sm.update(candle, idx, levels)
 
                 if triggered and details:
+                    # Daily loss limit check — same as live bot
+                    if day_realized_loss <= -abs(dll):
+                        logger.info(f"[BACKTEST] {trading_date} Daily loss limit ₹{dll} hit — skipping further trades.")
+                        break
+
                     entry_price = candle["close"]
                     sl = details["stop_loss"]
                     tp = details["take_profit"]
@@ -196,6 +204,8 @@ def run_backtest(
                     all_trades.append(trade_rec)
                     trade_count += 1
                     open_trade = trade_rec
+                    # Accumulate realized P&L for loss limit check on next trade
+                    day_realized_loss += exit_info["pnl"]
                     logger.info(
                         f"[BACKTEST] {trading_date} {name} {trade_type} "
                         f"Entry={entry_price} SL={sl} TP={tp} → {exit_info['status']} PNL=₹{exit_info['pnl']}"
