@@ -577,9 +577,9 @@ class UpstoxClient:
             return None
 
         token = self.get_token()
-        today = date.today()
+        today = datetime.now(_IST).date()
         from_d = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # wider window for holidays
-        to_d   = today.strftime("%Y-%m-%d")
+        to_d = today.strftime("%Y-%m-%d")
         instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
         url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_d}/{from_d}"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -588,19 +588,22 @@ class UpstoxClient:
             resp = requests.get(url, headers=headers, timeout=10)
             if resp.status_code == 200:
                 raw = resp.json().get("data", {}).get("candles", [])
-                # raw[0] = today (or latest), raw[1] = previous session
-                prev = None
-                if len(raw) >= 2:
-                    prev = raw[1]
-                elif len(raw) == 1:
-                    prev = raw[0]
+                previous = None
+                for candle in raw:
+                    if not isinstance(candle, list) or len(candle) < 5:
+                        continue
+                    candle_date = str(candle[0])[:10]
+                    if candle_date >= today.strftime("%Y-%m-%d"):
+                        continue
+                    previous = candle
+                    break
 
-                if prev:
-                    h, l, c = float(prev[2]), float(prev[3]), float(prev[4])
+                if previous:
+                    h, l, c = float(previous[2]), float(previous[3]), float(previous[4])
                     logger.info(f"[LIVE] Prev day OHLC: H={h} L={l} C={c}")
                     return {"high": h, "low": l, "close": c}
 
-                logger.warning("[LIVE] No daily candles returned for prev OHLC.")
+                logger.warning("[LIVE] No prior trading day OHLC returned for prev OHLC.")
                 return None
 
             elif resp.status_code == 401:
