@@ -12,8 +12,11 @@ from database.db import get_db, init_db
 from database.models import Trade, DailyState, StrategyState
 from brokers.upstox_client import UpstoxClient
 from risk.manager import RiskManager
-from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupStateMachine, CPRLevels
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
+
+# strategies import MUST be last — after all other modules are fully loaded
+# to avoid circular import issues
+from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupStateMachine, CPRLevels
 
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi import Request
@@ -82,7 +85,6 @@ def get_today_cpr_levels(db: Session) -> CPRLevels:
 def startup_event():
     init_db()
     scheduler = BackgroundScheduler()
-    # Run on completed 5-minute candle boundaries (offset +30s to let candle fully close)
     scheduler.add_job(
         monitor_interval_tick,
         "cron",
@@ -108,9 +110,6 @@ def startup_event():
 
 
 def check_active_position_targets():
-    """
-    Checks active open positions and evaluates SL / TP limits against current LTP.
-    """
     from database.db import SessionLocal
     db = SessionLocal()
     try:
@@ -174,24 +173,10 @@ def check_active_position_targets():
         db.close()
 
 
-# Track the last processed candle time to avoid reprocessing the same candle
 _last_processed_candle_time: Optional[str] = None
 
 
 def monitor_interval_tick():
-    """
-    Fetches the latest COMPLETED 5-minute candles from Upstox and feeds ONLY
-    the newest completed candle to the strategy engine.
-
-    Architecture:
-        Upstox Live Data
-            ↓
-        5-minute Candle Builder (Upstox intraday API)
-            ↓
-        CPR Strategy Engine (processes only newly completed candles)
-            ↓
-        Dashboard
-    """
     global _last_processed_candle_time
 
     from database.db import SessionLocal
@@ -206,7 +191,6 @@ def monitor_interval_tick():
             logger.warning("Live Upstox data unavailable (DISCONNECTED). Strategy execution paused until connection is restored.")
             return
 
-        # 1. Fetch all of today's completed 5m candles from Upstox
         candles = upstox.get_nifty_ohlc_5m()
         if not candles:
             logger.warning("[LIVE] No candles returned from Upstox — skipping strategy tick.")
@@ -217,23 +201,14 @@ def monitor_interval_tick():
             f"Data source: {upstox.data_source}"
         )
 
-        # 2. Identify the latest COMPLETED candle
-        # The last candle in the list is the most recently completed 5m bar
         latest_candle = candles[-1]
         latest_candle_time = latest_candle.get("time", "")
 
-        # 3. Skip if we already processed this candle (avoid duplicate evaluations)
         if latest_candle_time == _last_processed_candle_time:
-            logger.debug(
-                f"[LIVE] Candle at {latest_candle_time} already processed — skipping."
-            )
+            logger.debug(f"[LIVE] Candle at {latest_candle_time} already processed — skipping.")
             return
 
-        # 4. Get today's CPR levels
         levels = get_today_cpr_levels(db)
-
-        # 5. Feed ALL candles to state machines to synchronise intermediate states,
-        #    but only ACT on signals from the latest completed candle.
         rm = RiskManager(db)
 
         for i, candle in enumerate(candles):
@@ -297,7 +272,6 @@ def monitor_interval_tick():
                         else:
                             notify_system_error(f"Failed to execute order for {name}: {order['message']}")
 
-        # 6. Mark this candle as processed
         _last_processed_candle_time = latest_candle_time
         logger.info(f"[LIVE] Strategy evaluated for candle at {latest_candle_time}.")
 
@@ -319,12 +293,7 @@ def get_system_status(db: Session = Depends(get_db)):
     daily = rm.get_or_create_daily_state()
     conn_status = upstox.get_connection_status()
 
-    # Use the cached last-known LTP if live fetch is unavailable to avoid
-    # forcing a network call during status requests (and to surface the
-    # most recent CMP when market is closed).
     current_ltp = upstox.last_known_ltp
-    # If the client has gone disconnected but a cached LTP exists, indicate that
-    # the value is a cached source so the frontend can label it accordingly.
     cmp_source = upstox.cmp_source if upstox.cmp_source != "DISCONNECTED" else (
         "CACHED" if upstox.last_known_ltp is not None else "DISCONNECTED"
     )
@@ -434,7 +403,6 @@ def upstox_callback(request: Request, code: str, db: Session = Depends(get_db)):
 
 @app.post("/api/config")
 def update_config(data: dict, db: Session = Depends(get_db)):
-    """Allows client-side UI to live adjust thresholds, buffers and trading modes."""
     global _today_cpr_levels, _cpr_date
 
     if "upstox_api_key" in data or "upstox_api_secret" in data:
@@ -502,10 +470,6 @@ def update_config(data: dict, db: Session = Depends(get_db)):
 
 @app.post("/api/simulate-candle")
 def simulate_candle(data: dict, db: Session = Depends(get_db)):
-    """
-    Playground endpoint: Receives custom OHLC data, feeds it into strategy engine.
-    Only for manual testing — the live engine uses get_nifty_ohlc_5m().
-    """
     o = float(data.get("open", 19500))
     h = float(data.get("high", 19520))
     l = float(data.get("low", 19480))
@@ -532,7 +496,6 @@ def simulate_candle(data: dict, db: Session = Depends(get_db)):
 
 @app.post("/api/reset-strategy")
 def reset_strategy_states():
-    """Resets all strategy state machines to IDLE (state 0)"""
     for name, m in setups.items():
         m.reset_state(0, "User manual reset")
     return {"status": "success", "message": "All strategy setup state machines reset to IDLE."}
@@ -545,7 +508,6 @@ _trading_paused: bool = False
 
 @app.post("/api/pause-trading")
 def pause_trading():
-    """Pauses all live trade execution. Strategy engine still runs but will not place any orders."""
     global _trading_paused
     _trading_paused = True
     logger.warning("TRADING PAUSED by user via dashboard. No new orders will be placed.")
@@ -553,7 +515,6 @@ def pause_trading():
 
 @app.post("/api/resume-trading")
 def resume_trading():
-    """Resumes live trade execution after a pause."""
     global _trading_paused
     _trading_paused = False
     logger.info("TRADING RESUMED by user via dashboard.")
@@ -565,16 +526,10 @@ def get_pause_state():
 
 
 # ---------------------------------------------------------------
-# FEATURE 2: Manual Close — mark an open trade as closed in DB
+# FEATURE 2: Manual Close
 # ---------------------------------------------------------------
 @app.post("/api/trades/{trade_id}/manual-close")
 def manual_close_trade(trade_id: int, data: dict, db: Session = Depends(get_db)):
-    """
-    Marks an OPEN trade as manually closed in the system DB.
-    Call this after you square off a position directly in your broker app
-    so the system stops trying to manage or re-exit that trade.
-    Body: { "exit_price": 123.45 }  (the premium you exited at, optional — defaults to entry price)
-    """
     trade = db.query(Trade).filter(Trade.id == trade_id).first()
     if not trade:
         raise HTTPException(status_code=404, detail=f"Trade ID {trade_id} not found.")
@@ -606,11 +561,10 @@ def manual_close_trade(trade_id: int, data: dict, db: Session = Depends(get_db))
 
 
 # ---------------------------------------------------------------
-# FEATURE 3: Keepalive ping endpoint (prevents Render free tier sleep)
+# FEATURE 3: Keepalive ping
 # ---------------------------------------------------------------
 @app.get("/ping")
 def ping():
-    """Lightweight keepalive endpoint. Hit this every 10 minutes to prevent Render free tier sleep."""
     return {"pong": True, "ts": datetime.utcnow().isoformat()}
 
 
@@ -622,7 +576,6 @@ def health_endpoint():
 
 @app.get("/api/v1/upstox-status")
 def view_upstox_session_status(request: Request):
-    """Returns detailed login metrics, expiry times, and session health for the client dashboard."""
     status = upstox.get_connection_status()
 
     redirect_uri = settings.UPSTOX_REDIRECT_URI
@@ -726,4 +679,4 @@ if os.path.exists("./dist"):
         item_path = os.path.join("./dist", full_path)
         if os.path.exists(item_path) and os.path.isfile(item_path):
             return FileResponse(item_path)
-        return FileResponse("./dist/index.html")
+        return FileResponse("./dist/index.html") 
