@@ -657,6 +657,15 @@ export default function App() {
               <span className="text-[10px]">Authenticate Upstox to load live CPR</span>
             </div>
           )}
+          {/* Semantic-order warning: show if levels don't follow R1>TC>Pivot>BC>S1 */}
+          {hasCPR && (() => {
+            const semanticOk = (displayCpr.r1 > displayCpr.tc && displayCpr.tc > displayCpr.pivot && displayCpr.pivot > displayCpr.bc && displayCpr.bc > displayCpr.s1);
+            return !semanticOk ? (
+              <div className="mt-2 p-2 rounded border border-amber-700 bg-amber-900/10 text-amber-300 text-xs">
+                ⚠️ Note: CPR semantic order violated (TC may be below BC). Values are computed correctly from previous-day OHLC.
+              </div>
+            ) : null;
+          })()}
 
           <div className="mt-auto flex flex-col gap-2">
             {/* RULE 4: DATA SOURCE card */}
