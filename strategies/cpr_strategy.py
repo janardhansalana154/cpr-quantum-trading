@@ -22,8 +22,11 @@ def calculate_cpr_levels(high: float, low: float, close: float) -> CPRLevels:
     S1 = (2 * Pivot) - High
     """
     pivot = (high + low + close) / 3.0
-    bc = (high + low) / 2.0
-    tc = pivot + (pivot - bc)
+    mid   = (high + low) / 2.0          # midpoint of High+Low
+    other = pivot + (pivot - mid)        # the other central line
+    # TC must always be the HIGHER value, BC always the LOWER value
+    tc = max(mid, other)
+    bc = min(mid, other)
     r1 = (2.0 * pivot) - low
     s1 = (2.0 * pivot) - high
     
@@ -50,17 +53,6 @@ class SetupStateMachine:
       2 = RECOVERED
       3 = RETESTED
       4 = CONFIRMED
-
-    Retest invalidation rule (all setups):
-      If, while waiting for the retest (State 2), a candle closes back THROUGH the
-      key level in the break direction, the setup is NOT simply reset to IDLE.
-      Instead it is treated as a fresh State 1 BROKEN — because price has just
-      re-confirmed the original breakout direction.
-
-      Setup A  — close > R1  while in State 2  → back to State 1 (re-broken above R1)
-      Setup B  — close < S1  while in State 2  → back to State 1 (re-broken below S1)
-      Setup C  — close < TC  while in State 2  → back to State 1 (re-broken below TC)
-      Setup D  — close > BC  while in State 2  → back to State 1 (re-broken above BC)
     """
     def __init__(self, name: Literal["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"]):
         self.name = name
@@ -93,21 +85,6 @@ class SetupStateMachine:
         self.c_high = None
         self.c_low = None
 
-    def _re_enter_state1(self, bar_idx: int, log_reason: str = ""):
-        """
-        Moves back to State 1 BROKEN without full reset.
-        Used when a retest candle closes back through the key level,
-        re-confirming the original breakout — the setup restarts from State 1.
-        Retest/confirmation trackers are cleared since they are no longer valid.
-        """
-        logger.info(f"{self.name}: State downgraded from 2 back to 1 [RE-BROKEN] at bar {bar_idx}. Reason: {log_reason}")
-        self.state = 1
-        self.state_bar = bar_idx
-        self.r_high = None
-        self.r_low = None
-        self.c_high = None
-        self.c_low = None
-
     def update(self, candle: Dict, idx: int, levels: CPRLevels) -> Tuple[bool, Optional[Dict]]:
         """
         Receives current candle data (open, high, low, close, index) and returns:
@@ -129,7 +106,7 @@ class SetupStateMachine:
                     self.state_bar = idx
                     logger.info(f"SETUP_A: Bar {idx} - state 1 [BROKEN]. Close ({cl}) above R1 ({levels.r1})")
                     
-            # State 1 - Recovery: close back below R1 within fail_win
+            # State 1 - Failure: close back below R1 within fail_win
             elif self.state == 1:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.fail_win:
@@ -137,25 +114,19 @@ class SetupStateMachine:
                         self.state = 2
                         self.state_bar = idx
                         logger.info(f"SETUP_A: Bar {idx} - state 2 [RECOVERED]. Close ({cl}) below R1 ({levels.r1}) inside fail window ({elapsed} bars)")
-                    # Still above R1 — stay in state 1, window keeps ticking
                 else:
-                    self.reset_state(idx, "Failure window elapsed without recovery")
+                    self.reset_state(idx, "Failure window elapsed")
                     
             # State 2 - Retest: high in [R1-tol, R1+tol] and close < R1 within ret_win
-            # INVALIDATION: if close > R1, setup re-enters State 1 (re-broken above R1)
             elif self.state == 2:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.ret_win:
-                    if cl > levels.r1:
-                        # Price closed back above R1 — this is now a fresh breakout above R1
-                        # Treat as State 1 re-entry, not a full reset
-                        self._re_enter_state1(idx, f"Retest candle closed above R1 ({cl} > {levels.r1}). Setup re-enters State 1.")
-                    elif (levels.r1 - self.ret_tol) <= hi <= (levels.r1 + self.ret_tol) and cl < levels.r1:
+                    if (levels.r1 - self.ret_tol) <= hi <= (levels.r1 + self.ret_tol) and cl < levels.r1:
                         self.state = 3
                         self.state_bar = idx
                         self.r_high = hi
                         self.r_low = lo
-                        logger.info(f"SETUP_A: Bar {idx} - state 3 [RETESTED]. High ({hi}) retesting R1 ({levels.r1}) within tolerance ({self.ret_tol}). Retest High={hi}, Retest Low={lo}")
+                        logger.info(f"SETUP_A: Bar {idx} - state 3 [RETESTED]. High ({hi}) retesting R1 ({levels.r1}) within retest tolerance ({self.ret_tol})")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
                     
@@ -178,6 +149,7 @@ class SetupStateMachine:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.ent_win:
                     if lo < self.c_low:
+                        # Checks guards
                         inside = is_inside_cpr(cl, levels)
                         if not inside and cl > levels.tc:
                             trigger_entry = True
@@ -205,7 +177,7 @@ class SetupStateMachine:
                     self.state_bar = idx
                     logger.info(f"SETUP_B: Bar {idx} - state 1 [BROKEN]. Close ({cl}) below S1 ({levels.s1})")
                     
-            # State 1 - Recovery: close back above S1 within fail_win
+            # State 1 - Recovery: close above S1 within fail_win
             elif self.state == 1:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.fail_win:
@@ -214,22 +186,18 @@ class SetupStateMachine:
                         self.state_bar = idx
                         logger.info(f"SETUP_B: Bar {idx} - state 2 [RECOVERED]. Close ({cl}) above S1 ({levels.s1}) inside fail window ({elapsed} bars)")
                 else:
-                    self.reset_state(idx, "Failure window elapsed without recovery")
+                    self.reset_state(idx, "Recovery window elapsed")
                     
             # State 2 - Retest: low in [S1-tol, S1+tol] and close > S1 within ret_win
-            # INVALIDATION: if close < S1, setup re-enters State 1 (re-broken below S1)
             elif self.state == 2:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.ret_win:
-                    if cl < levels.s1:
-                        # Price closed back below S1 — fresh re-break downward
-                        self._re_enter_state1(idx, f"Retest candle closed below S1 ({cl} < {levels.s1}). Setup re-enters State 1.")
-                    elif (levels.s1 - self.ret_tol) <= lo <= (levels.s1 + self.ret_tol) and cl > levels.s1:
+                    if (levels.s1 - self.ret_tol) <= lo <= (levels.s1 + self.ret_tol) and cl > levels.s1:
                         self.state = 3
                         self.state_bar = idx
                         self.r_high = hi
                         self.r_low = lo
-                        logger.info(f"SETUP_B: Bar {idx} - state 3 [RETESTED]. Low ({lo}) retesting S1 ({levels.s1}) within tolerance ({self.ret_tol}). Retest Low={lo}, Retest High={hi}")
+                        logger.info(f"SETUP_B: Bar {idx} - state 3 [RETESTED]. Low ({lo}) retesting S1 ({levels.s1}) within tolerance")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
                     
@@ -279,7 +247,7 @@ class SetupStateMachine:
                     self.state_bar = idx
                     logger.info(f"SETUP_C: Bar {idx} - state 1 [BROKEN]. Close ({cl}) above TC ({levels.tc})")
                     
-            # State 1 - Recovery: close back below TC within fail_win
+            # State 1 - Failure: close < TC within fail_win
             elif self.state == 1:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.fail_win:
@@ -288,22 +256,18 @@ class SetupStateMachine:
                         self.state_bar = idx
                         logger.info(f"SETUP_C: Bar {idx} - state 2 [RECOVERED]. Close ({cl}) fell back below TC ({levels.tc})")
                 else:
-                    self.reset_state(idx, "Failure window elapsed without recovery")
+                    self.reset_state(idx, "Failure window elapsed")
                     
             # State 2 - Retest: low in [TC-tol, TC+tol] and close > TC within ret_win
-            # INVALIDATION: if close < TC, setup re-enters State 1 (re-broken below TC)
             elif self.state == 2:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.ret_win:
-                    if cl < levels.tc:
-                        # Price closed back below TC — fresh re-break downward through TC
-                        self._re_enter_state1(idx, f"Retest candle closed below TC ({cl} < {levels.tc}). Setup re-enters State 1.")
-                    elif (levels.tc - self.ret_tol) <= lo <= (levels.tc + self.ret_tol) and cl > levels.tc:
+                    if (levels.tc - self.ret_tol) <= lo <= (levels.tc + self.ret_tol) and cl > levels.tc:
                         self.state = 3
                         self.state_bar = idx
                         self.r_high = hi
                         self.r_low = lo
-                        logger.info(f"SETUP_C: Bar {idx} - state 3 [RETESTED]. Low ({lo}) retested TC ({levels.tc}) within tolerance ({self.ret_tol}). Retest Low={lo}, Retest High={hi}")
+                        logger.info(f"SETUP_C: Bar {idx} - state 3 [RETESTED]. Low ({lo}) retested TC ({levels.tc})")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
                     
@@ -353,7 +317,7 @@ class SetupStateMachine:
                     self.state_bar = idx
                     logger.info(f"SETUP_D: Bar {idx} - state 1 [BROKEN]. Close ({cl}) below BC ({levels.bc})")
                     
-            # State 1 - Recovery: close back above BC within fail_win
+            # State 1 - Recovery: close > BC within fail_win
             elif self.state == 1:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.fail_win:
@@ -362,22 +326,18 @@ class SetupStateMachine:
                         self.state_bar = idx
                         logger.info(f"SETUP_D: Bar {idx} - state 2 [RECOVERED]. Close ({cl}) recovered above BC ({levels.bc})")
                 else:
-                    self.reset_state(idx, "Recovery window elapsed without recovery")
+                    self.reset_state(idx, "Recovery window elapsed")
                     
             # State 2 - Retest: high in [BC-tol, BC+tol] and close < BC within ret_win
-            # INVALIDATION: if close > BC, setup re-enters State 1 (re-broken above BC)
             elif self.state == 2:
                 elapsed = self.bars_elapsed(idx)
                 if elapsed <= self.ret_win:
-                    if cl > levels.bc:
-                        # Price closed back above BC — fresh re-break upward through BC
-                        self._re_enter_state1(idx, f"Retest candle closed above BC ({cl} > {levels.bc}). Setup re-enters State 1.")
-                    elif (levels.bc - self.ret_tol) <= hi <= (levels.bc + self.ret_tol) and cl < levels.bc:
+                    if (levels.bc - self.ret_tol) <= hi <= (levels.bc + self.ret_tol) and cl < levels.bc:
                         self.state = 3
                         self.state_bar = idx
                         self.r_high = hi
                         self.r_low = lo
-                        logger.info(f"SETUP_D: Bar {idx} - state 3 [RETESTED]. High ({hi}) retests BC ({levels.bc}) within tolerance ({self.ret_tol}). Retest High={hi}, Retest Low={lo}")
+                        logger.info(f"SETUP_D: Bar {idx} - state 3 [RETESTED]. High ({hi}) retests BC ({levels.bc})")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
                     
