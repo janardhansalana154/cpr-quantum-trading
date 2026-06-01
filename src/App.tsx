@@ -57,37 +57,6 @@ interface SimulatedTrade {
   exitTime: string | null;
 }
 
-interface BacktestTrade {
-  setup_name: string;
-  trade_type: "BUY" | "SELL";
-  entry_price: number;
-  entry_time: string;
-  stop_loss: number;
-  take_profit: number;
-  exit_price: number;
-  exit_time: string;
-  status: string;
-  pnl: number;
-}
-
-interface BacktestResult {
-  period: { start_date: string; end_date: string };
-  days_requested: number;
-  days_covered: number;
-  candles_count: number;
-  source: string;
-  metrics: {
-    total_trades: number;
-    win_rate: number;
-    wins: number;
-    losses: number;
-    gross_profit: number;
-    gross_loss: number;
-    net_pnl: number;
-  };
-  trades: BacktestTrade[];
-}
-
 // RULE 4 + RULE 5: Strong typing for data source and market status
 interface LiveSystemStatus {
   // RULE 4: DATA SOURCE — only these four values are valid
@@ -425,14 +394,19 @@ export default function App() {
     retTol: 5.0, slBuf: 3.0, tpBuf: 3.0, lossLimit: 2000,
   });
 
+  const todayString = new Date().toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+
   const [cprLevels, setCprLevels] = useState<CPRLevels>({
     pivot: 0, bc: 0, tc: 0, r1: 0, s1: 0,
   });
 
-  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "broker" | "help">("cockpit");
+  const [reportDate, setReportDate] = useState(todayString);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportResult, setReportResult] = useState<any>(null);
+  const [reportError, setReportError] = useState<string | null>(null);
 
-  const todayString = new Date().toISOString().slice(0, 10);
-  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "reports" | "broker" | "help">("cockpit");
 
   // ── DEMO ONLY: trades shown in the demo player (never confused with real DB trades)
   const [demoTrades, setDemoTrades] = useState<SimulatedTrade[]>([]);
@@ -510,7 +484,31 @@ export default function App() {
     return () => { window.removeEventListener("message", handleMsg); clearInterval(liveTimer); clearInterval(tradesTimer); };
   }, []);
 
+  const handleRunReport = async () => {
+    setReportError(null);
+    setReportResult(null);
+    if (!reportDate) {
+      setReportError("Please select a date.");
+      return;
+    }
+    setReportLoading(true);
+    try {
+      const res = await fetch(`/api/report/historical?date=${reportDate}`);
+      if (!res.ok) {
+        const text = await res.text();
+        setReportError(`Report failed: ${res.status} ${text}`);
+      } else {
+        setReportResult(await res.json());
+      }
+    } catch (e: any) {
+      setReportError(`Network error: ${e?.message || e}`);
+    } finally {
+      setReportLoading(false);
+    }
+  };
+
   const handleResetDemo = () => {
+
     setCurrentIdx(0);
     setIsPlaying(false);
     setDemoTrades([]);
@@ -558,7 +556,7 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 p-0.5 bg-slate-950 rounded border border-slate-800">
-          {(["cockpit", "stateMachines", "broker", "help"] as const).map(tab => (
+          {(["cockpit", "stateMachines", "reports", "broker", "help"] as const).map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded text-xs font-bold font-mono transition-all uppercase tracking-wider cursor-pointer ${activeTab === tab ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>
               {tab === "stateMachines" ? "Setups" : tab === "broker" ? "Upstox" : tab.charAt(0).toUpperCase() + tab.slice(1)}
@@ -858,7 +856,119 @@ export default function App() {
             </div>
           )}
 
+          {activeTab === "reports" && (
+            <div className="flex flex-col gap-6">
+              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5">
+                <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-800">
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Historical Trade Report</h3>
+                    <p className="text-[11px] text-slate-400 mt-1">View real executed trades and P&L for any date.</p>
+                  </div>
+                  <button onClick={handleRunReport}
+                    className={`px-4 py-2 rounded uppercase text-xs font-bold tracking-wider ${reportLoading ? "bg-slate-700 text-slate-200" : "bg-sky-500 text-slate-950 hover:bg-sky-400"}`}>
+                    {reportLoading ? "Loading…" : "Generate Report"}
+                  </button>
+                </div>
 
+                <div className="mt-5 flex gap-4 items-end">
+                  <div className="flex-1 space-y-2">
+                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Select Date</label>
+                    <input type="date" value={reportDate}
+                      onChange={e => setReportDate(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 text-sm font-mono" />
+                  </div>
+                </div>
+
+                {reportError && (
+                  <div className="mt-4 rounded-lg border border-rose-500/40 bg-rose-950/20 p-3 text-slate-200 text-sm">
+                    {reportError}
+                  </div>
+                )}
+              </div>
+
+              {reportResult && (
+                <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 space-y-5">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
+                      <p className="text-[10px] uppercase tracking-widest text-slate-500">Date</p>
+                      <p className="mt-2 font-bold text-white text-sm font-mono">{reportResult.date}</p>
+                    </div>
+                    <div className="bg-rose-950/20 border border-rose-800 rounded-lg p-4">
+                      <p className="text-[10px] uppercase tracking-widest text-rose-300">Total Trades</p>
+                      <p className="mt-2 text-2xl font-bold text-rose-300">{reportResult.metrics.total_trades}</p>
+                    </div>
+                    <div className="bg-sky-950/20 border border-sky-800 rounded-lg p-4">
+                      <p className="text-[10px] uppercase tracking-widest text-sky-300">Win Rate</p>
+                      <p className="mt-2 text-2xl font-bold text-sky-300">{reportResult.metrics.win_rate.toFixed(2)}%</p>
+                    </div>
+                    <div className={`${reportResult.metrics.net_pnl >= 0 ? "bg-emerald-950/20 border-emerald-800" : "bg-rose-950/20 border-rose-800"} border rounded-lg p-4`}>
+                      <p className={`text-[10px] uppercase tracking-widest ${reportResult.metrics.net_pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>Net P&L</p>
+                      <p className={`mt-2 text-2xl font-bold ${reportResult.metrics.net_pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>₹{reportResult.metrics.net_pnl.toFixed(2)}</p>
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4 text-sm space-y-2">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Wins</span>
+                      <span className="text-white font-bold">{reportResult.metrics.wins}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Losses</span>
+                      <span className="text-white font-bold">{reportResult.metrics.losses}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Gross Profit</span>
+                      <span className="text-white font-bold">₹{reportResult.metrics.gross_profit.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">Gross Loss</span>
+                      <span className="text-white font-bold">₹{reportResult.metrics.gross_loss.toFixed(2)}</span>
+                    </div>
+                  </div>
+
+                  {reportResult.trades.length > 0 && (
+                    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
+                      <h4 className="text-xs uppercase tracking-widest text-slate-400 mb-3 font-bold">Trades ({reportResult.trades.length})</h4>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-xs font-mono">
+                          <thead className="border-b border-slate-700">
+                            <tr className="text-slate-400">
+                              <th className="text-left p-2">Setup</th>
+                              <th className="text-left p-2">Type</th>
+                              <th className="text-right p-2">Entry</th>
+                              <th className="text-right p-2">Exit</th>
+                              <th className="text-right p-2">SL</th>
+                              <th className="text-right p-2">TP</th>
+                              <th className="text-right p-2">P&L</th>
+                              <th className="text-left p-2">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reportResult.trades.map((trade: any, idx: number) => (
+                              <tr key={idx} className="border-b border-slate-800/40 hover:bg-slate-950/40">
+                                <td className="p-2 text-slate-300">{trade.setup_name}</td>
+                                <td className="p-2"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.trade_type === "BUY" ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"}`}>{trade.trade_type}</span></td>
+                                <td className="text-right p-2 text-slate-300">₹{trade.entry_price.toFixed(2)}</td>
+                                <td className="text-right p-2 text-slate-300">{trade.exit_price ? `₹${trade.exit_price.toFixed(2)}` : "—"}</td>
+                                <td className="text-right p-2 text-slate-400">₹{trade.stop_loss.toFixed(2)}</td>
+                                <td className="text-right p-2 text-slate-400">₹{trade.take_profit.toFixed(2)}</td>
+                                <td className={`text-right p-2 font-bold ${trade.pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{trade.pnl >= 0 ? "+" : ""}₹{trade.pnl.toFixed(2)}</td>
+                                <td className="p-2"><span className="text-[10px] text-slate-400">{trade.status}</span></td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {reportResult.trades.length === 0 && (
+                    <div className="rounded-lg border border-slate-800 p-4 text-slate-400 text-sm text-center">No trades found for {reportResult.date}.</div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           {activeTab === "stateMachines" && (
             <div className="flex flex-col gap-6">
