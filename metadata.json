@@ -1,0 +1,6 @@
+{
+  "name": "CPR 4-Setup Trading System",
+  "description": "Production-ready automated trading system for NIFTY 5m candles executing the CPR 4-Setup strategy with Upstox API, risk management, and Telegram alerts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

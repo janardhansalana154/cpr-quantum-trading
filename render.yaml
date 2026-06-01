@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: cpr-quantum-trading
+    runtime: docker # leverages our robust multi-stage Dockerfile which builds both React and FastAPI
+    plan: free # places the app on Render's free tier plan
+    envVars:
+      - key: TRADING_MODE
+        value: paper # locked in secure paper-trading execution model by default
+      - key: LOG_LEVEL
+        value: INFO
+      - key: UPSTOX_API_KEY
+        sync: false # prompts user for secret keys in Render console
+      - key: UPSTOX_API_SECRET
+        sync: false 
+      - key: UPSTOX_REDIRECT_URI
+        sync: false # e.g. https://my-app.onrender.com/callback
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
