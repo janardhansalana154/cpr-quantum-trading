@@ -634,19 +634,21 @@ export default function App() {
           {hasCPR ? (
             <div className="space-y-3">
               {[
-                { label: "R1 Level", val: displayCpr.r1, color: "rose" },
-                { label: "TC (Top)",  val: displayCpr.tc,  color: "orange" },
-                { label: "PIVOT",     val: displayCpr.pivot, color: "white" },
-                { label: "BC (Bot)",  val: displayCpr.bc,  color: "cyan" },
-                { label: "S1 Level",  val: displayCpr.s1,  color: "emerald" },
-              ].map(({ label, val, color }) => (
-                <div key={label} className={`p-3 bg-${color}-500/10 border-l-2 border-${color}-500 rounded-r`}>
-                  <div className={`flex justify-between text-xs text-${color}-400`}>
-                    <span>{label}</span>
-                    <span className="font-mono font-bold text-sm">{val.toFixed(2)}</span>
+                { label: "R1 Level",   val: displayCpr.r1,   color: "rose" },
+                { label: "TC Level",   val: displayCpr.tc,   color: "orange" },
+                { label: "PIVOT",      val: displayCpr.pivot, color: "white" },
+                { label: "BC Level",   val: displayCpr.bc,   color: "cyan" },
+                { label: "S1 Level",   val: displayCpr.s1,   color: "emerald" },
+              ]
+                .sort((a, b) => b.val - a.val)
+                .map(({ label, val, color }) => (
+                  <div key={label} className={`p-3 bg-${color}-500/10 border-l-2 border-${color}-500 rounded-r`}>
+                    <div className={`flex justify-between text-xs text-${color}-400`}>
+                      <span>{label}</span>
+                      <span className="font-mono font-bold text-sm">{val.toFixed(2)}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
             </div>
           ) : (
             <div className="p-4 bg-slate-900 rounded border border-slate-700 text-center text-xs text-slate-500 font-mono">
