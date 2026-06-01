@@ -113,7 +113,26 @@ def calculate_cpr_levels(prev_high: float, prev_low: float, prev_close: float) -
     s1    = (2 * pivot) - prev_high
     return dict(pivot=pivot, bc=bc, tc=tc, r1=r1, s1=s1)
 
+# ---------------------------------------------------------------------------
+# CPR band helpers
+# ---------------------------------------------------------------------------
 
+def is_inside_cpr(price: float, tc: float, bc: float) -> bool:
+    """
+    Returns True if price is within the CPR band (between BC and TC inclusive).
+    Used by other modules to check if price is consolidating inside the CPR.
+    """
+    return bc <= price <= tc
+
+
+def is_above_cpr(price: float, tc: float) -> bool:
+    """Returns True if price is above the CPR band (above TC)."""
+    return price > tc
+
+
+def is_below_cpr(price: float, bc: float) -> bool:
+    """Returns True if price is below the CPR band (below BC)."""
+    return price < bc
 # ---------------------------------------------------------------------------
 # Individual setup processors
 # ---------------------------------------------------------------------------
