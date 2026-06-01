@@ -1,26 +1,33 @@
 """
 Backtest Engine — runs all 4 CPR setups against historical Upstox data.
-Fetches previous-day OHLC to compute CPR levels, then replays 5-min candles
-through the state machines exactly as the live bot does.
+
+P&L MODEL:
+  - SL and TP are NIFTY INDEX price levels (same as live bot)
+  - P&L = index_points_moved × lots × LOT_SIZE (75)
+  - A single trade loss is HARD CAPPED at DAILY_LOSS_LIMIT
+  - If a trade's SL loss would exceed the daily limit, the trade exits
+    at the exact price that hits the daily limit instead
+  - After any trade closes, if cumulative day P&L <= -DAILY_LOSS_LIMIT,
+    no further trades are taken that day
 """
+import time
 from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Any
 import logging
 
-import time
 from config.settings import settings
 from strategies.cpr_strategy import SetupStateMachine, calculate_cpr_levels
 
 logger = logging.getLogger("CPR_System.Backtest")
 
-NIFTY_LOT_SIZE = 75  # index options lot size for P&L estimation
+LOT_SIZE = 75   # NIFTY options lot size
+
 
 def _trading_days(start: date, end: date) -> List[date]:
-    """Return weekdays (Mon-Fri) between start and end inclusive."""
     days = []
     d = start
     while d <= end:
-        if d.weekday() < 5:  # Monday=0 … Friday=4
+        if d.weekday() < 5:
             days.append(d)
         d += timedelta(days=1)
     return days
@@ -32,50 +39,90 @@ def _simulate_exit(
     entry_price: float,
     stop_loss: float,
     take_profit: float,
-    trade_type: str,   # "SELL" (short/PE) or "BUY" (long/CE)
+    trade_type: str,
+    lots: int,
+    day_realized_pnl: float,
+    daily_loss_limit: float,
 ) -> Dict:
     """
-    Walk candles after entry to find the first SL or TP hit.
-    Returns exit dict with price, time, status, pnl.
+    Walk candles after entry bar to find first SL, TP, or loss-limit hit.
+
+    Loss-limit cap logic:
+      remaining_loss_budget = daily_loss_limit - abs(day_realized_pnl)  [always > 0 here]
+      max_loss_points = remaining_loss_budget / (lots * LOT_SIZE)
+      loss_exit_price = entry ± max_loss_points  (direction depends on trade_type)
+
+    If the loss-limit exit price is hit before normal SL, we exit there instead,
+    ensuring the day never loses more than daily_loss_limit in total.
     """
+    qty = lots * LOT_SIZE
+    remaining_budget = daily_loss_limit - abs(min(day_realized_pnl, 0))
+    max_loss_pts = remaining_budget / qty if qty > 0 else float('inf')
+
+    # Price level that would exhaust remaining budget
+    if trade_type == "SELL":   # Short — loss when price rises
+        loss_limit_price = entry_price + max_loss_pts
+        # Effective SL = tighter of normal SL and loss-limit price
+        effective_sl = min(stop_loss, loss_limit_price)
+    else:                       # Long — loss when price falls
+        loss_limit_price = entry_price - max_loss_pts
+        effective_sl = max(stop_loss, loss_limit_price)
+
+    squareoff_cutoff = settings.SQUAREOFF_HOUR * 60 + settings.SQUAREOFF_MIN
+
     for i in range(entry_bar_idx + 1, len(candles)):
         c = candles[i]
-        hi = c["high"]
-        lo = c["low"]
+        bar_hi   = c["high"]
+        bar_lo   = c["low"]
         time_str = c["time"]
 
-        if trade_type == "SELL":  # short — profit if price falls
-            # SL hit: price goes above stop_loss
-            if hi >= stop_loss:
-                pnl = (entry_price - stop_loss) * NIFTY_LOT_SIZE
-                return {"exit_price": stop_loss, "exit_time": time_str,
-                        "status": "CLOSED_SL", "pnl": round(pnl, 2)}
-            # TP hit: price falls to take_profit
-            if lo <= take_profit:
-                pnl = (entry_price - take_profit) * NIFTY_LOT_SIZE
-                return {"exit_price": take_profit, "exit_time": time_str,
+        # 3 PM squareoff check
+        try:
+            cdt = datetime.fromisoformat(time_str.replace("+05:30", ""))
+            if cdt.hour * 60 + cdt.minute >= squareoff_cutoff:
+                exit_p = c["close"]
+                if trade_type == "SELL":
+                    pnl = (entry_price - exit_p) * qty
+                else:
+                    pnl = (exit_p - entry_price) * qty
+                return {"exit_price": round(exit_p, 2), "exit_time": time_str,
+                        "status": "CLOSED_EOD", "pnl": round(pnl, 2)}
+        except Exception:
+            pass
+
+        if trade_type == "SELL":
+            # SL / loss-limit hit: price rose to or above effective_sl
+            if bar_hi >= effective_sl:
+                pnl = (entry_price - effective_sl) * qty
+                status = "CLOSED_SL_LIMIT" if effective_sl < stop_loss else "CLOSED_SL"
+                return {"exit_price": round(effective_sl, 2), "exit_time": time_str,
+                        "status": status, "pnl": round(pnl, 2)}
+            # TP hit
+            if bar_lo <= take_profit:
+                pnl = (entry_price - take_profit) * qty
+                return {"exit_price": round(take_profit, 2), "exit_time": time_str,
+                        "status": "CLOSED_TP", "pnl": round(pnl, 2)}
+        else:
+            # SL / loss-limit hit: price fell to or below effective_sl
+            if bar_lo <= effective_sl:
+                pnl = (effective_sl - entry_price) * qty
+                status = "CLOSED_SL_LIMIT" if effective_sl > stop_loss else "CLOSED_SL"
+                return {"exit_price": round(effective_sl, 2), "exit_time": time_str,
+                        "status": status, "pnl": round(pnl, 2)}
+            # TP hit
+            if bar_hi >= take_profit:
+                pnl = (take_profit - entry_price) * qty
+                return {"exit_price": round(take_profit, 2), "exit_time": time_str,
                         "status": "CLOSED_TP", "pnl": round(pnl, 2)}
 
-        else:  # BUY — long — profit if price rises
-            # SL hit: price drops below stop_loss
-            if lo <= stop_loss:
-                pnl = (stop_loss - entry_price) * NIFTY_LOT_SIZE
-                return {"exit_price": stop_loss, "exit_time": time_str,
-                        "status": "CLOSED_SL", "pnl": round(pnl, 2)}
-            # TP hit: price rises to take_profit
-            if hi >= take_profit:
-                pnl = (take_profit - entry_price) * NIFTY_LOT_SIZE
-                return {"exit_price": take_profit, "exit_time": time_str,
-                        "status": "CLOSED_TP", "pnl": round(pnl, 2)}
-
-    # No exit hit by end of day — use last candle close
-    last = candles[-1]
-    last_close = last["close"]
+    # EOD — no SL/TP hit, close at last candle
+    last_close = candles[-1]["close"]
+    last_time  = candles[-1]["time"]
     if trade_type == "SELL":
-        pnl = (entry_price - last_close) * NIFTY_LOT_SIZE
+        pnl = (entry_price - last_close) * qty
     else:
-        pnl = (last_close - entry_price) * NIFTY_LOT_SIZE
-    return {"exit_price": last_close, "exit_time": last["time"],
+        pnl = (last_close - entry_price) * qty
+    return {"exit_price": round(last_close, 2), "exit_time": last_time,
             "status": "CLOSED_EOD", "pnl": round(pnl, 2)}
 
 
@@ -93,220 +140,201 @@ def run_backtest(
     sl_buffer: float = None,
     tp_buffer: float = None,
 ) -> Dict[str, Any]:
-    """
-    Main backtest runner. Fetches real historical NIFTY 5m data from Upstox
-    for each trading day and replays all 4 setups through the state machine.
-    """
-    # Use settings defaults if not overridden
     fw  = failure_window  or settings.FAILURE_WINDOW
     rw  = retest_window   or settings.RETEST_WINDOW
     cw  = confirm_window  or settings.CONFIRMATION_WINDOW
     ew  = entry_window    or settings.ENTRY_TRIGGER_WINDOW
-    rt  = retest_tol      if retest_tol is not None else settings.RETEST_TOLERANCE
-    slb = sl_buffer       if sl_buffer  is not None else settings.SL_BUFFER
-    tpb = tp_buffer       if tp_buffer  is not None else settings.TARGET_BUFFER
+    rt  = retest_tol      if retest_tol  is not None else settings.RETEST_TOLERANCE
     dll = daily_loss_limit if daily_loss_limit is not None else settings.DAILY_LOSS_LIMIT
+    lots = settings.POSITION_LOTS
 
     days = _trading_days(start_date, end_date)
-    all_trades: List[Dict] = []
+    all_trades:    List[Dict] = []
     day_summaries: List[Dict] = []
-    skipped_days: List[str] = []
+    skipped_days:  List[str]  = []
+
+    no_entry_cutoff  = settings.NO_ENTRY_AFTER_HOUR * 60 + settings.NO_ENTRY_AFTER_MIN
+    squareoff_cutoff = settings.SQUAREOFF_HOUR * 60 + settings.SQUAREOFF_MIN
 
     for trading_date in days:
         logger.info(f"[BACKTEST] Processing {trading_date} ...")
-        time.sleep(0.3)   # small delay to avoid Upstox rate limiting across days
+        time.sleep(0.3)
 
-        # 1. Fetch previous day OHLC for CPR calculation
         prev_ohlc = upstox_client.get_previous_day_ohlc_for_date(trading_date)
         if not prev_ohlc:
             logger.warning(f"[BACKTEST] No prev OHLC for {trading_date} — skipping.")
             skipped_days.append(str(trading_date))
             continue
 
-        levels = calculate_cpr_levels(
-            prev_ohlc["high"], prev_ohlc["low"], prev_ohlc["close"]
-        )
+        levels = calculate_cpr_levels(prev_ohlc["high"], prev_ohlc["low"], prev_ohlc["close"])
 
-        # 2. Fetch 5-min candles for this trading day
         candles = upstox_client.get_nifty_historical_5m_for_day(trading_date)
         if not candles:
             logger.warning(f"[BACKTEST] No candles for {trading_date} — skipping.")
             skipped_days.append(str(trading_date))
             continue
 
-        # 3. Fresh state machines for each day
-        setups = {
-            "SETUP_A": SetupStateMachine("SETUP_A"),
-            "SETUP_B": SetupStateMachine("SETUP_B"),
-            "SETUP_C": SetupStateMachine("SETUP_C"),
-            "SETUP_D": SetupStateMachine("SETUP_D"),
-        }
-        # Override windows from backtest params
+        # Fresh state machines per day
+        setups = {n: SetupStateMachine(n) for n in ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]}
         for sm in setups.values():
-            sm.fail_win = fw
-            sm.ret_win  = rw
-            sm.con_win  = cw
-            sm.ent_win  = ew
+            sm.fail_win = fw;  sm.ret_win = rw
+            sm.con_win  = cw;  sm.ent_win = ew
             sm.ret_tol  = rt
 
-        day_trades: List[Dict] = []
-        trade_count = 0
-        open_trade: Optional[Dict] = None
-        day_realized_loss = 0.0   # track cumulative loss for daily limit
+        day_trades:       List[Dict] = []
+        trade_count:      int        = 0
+        open_trade:       Optional[Dict] = None
+        day_realized_pnl: float      = 0.0
 
         for idx, candle in enumerate(candles):
-            # ── Time cutoff checks ──
-            candle_time_str = candle.get("time", "")
+            time_str = candle.get("time", "")
             try:
-                candle_dt = datetime.fromisoformat(candle_time_str.replace("+05:30", ""))
-                candle_hour_min = candle_dt.hour * 60 + candle_dt.minute
+                cdt = datetime.fromisoformat(time_str.replace("+05:30", ""))
+                bar_mins = cdt.hour * 60 + cdt.minute
             except Exception:
-                candle_hour_min = 0
+                bar_mins = 0
 
-            no_entry_cutoff = settings.NO_ENTRY_AFTER_HOUR * 60 + settings.NO_ENTRY_AFTER_MIN
-            squareoff_cutoff = settings.SQUAREOFF_HOUR * 60 + settings.SQUAREOFF_MIN
-
-            # ── 3 PM force squareoff ──
-            if candle_hour_min >= squareoff_cutoff and open_trade:
-                exit_price = candle["close"]
-                qty = NIFTY_LOT_SIZE
-                if open_trade["trade_type"] == "SELL":
-                    pnl = (open_trade["entry_price"] - exit_price) * qty
-                else:
-                    pnl = (exit_price - open_trade["entry_price"]) * qty
-                open_trade["exit_price"] = exit_price
-                open_trade["exit_time"]  = candle_time_str
-                open_trade["status"]     = "CLOSED_EOD"
-                open_trade["pnl"]        = round(pnl, 2)
-                day_realized_loss += pnl
-                open_trade = None
+            # 3 PM — force close any open trade then stop
+            if bar_mins >= squareoff_cutoff:
+                if open_trade and open_trade.get("status") == "OPEN_PENDING":
+                    exit_p = candle["close"]
+                    qty = lots * LOT_SIZE
+                    if open_trade["trade_type"] == "SELL":
+                        pnl = (open_trade["entry_price"] - exit_p) * qty
+                    else:
+                        pnl = (exit_p - open_trade["entry_price"]) * qty
+                    open_trade.update({
+                        "exit_price": round(exit_p, 2),
+                        "exit_time": time_str,
+                        "status": "CLOSED_EOD",
+                        "pnl": round(pnl, 2)
+                    })
+                    day_realized_pnl += pnl
                 break
 
-            if candle_hour_min >= squareoff_cutoff:
-                break   # No more entries or processing after 3 PM
+            # Clear open_trade if it has already been exited (exit_time reached)
+            if open_trade and open_trade.get("status") != "OPEN_PENDING":
+                open_trade = None
 
-            # Only 1 open trade at a time
+            # Already in a trade
             if open_trade:
-                # Check if this candle's time has passed the open trade's exit_time
-                if open_trade.get("exit_time") and candle_time_str >= open_trade["exit_time"]:
-                    open_trade = None
-                else:
-                    continue
+                continue
 
+            # Max trades reached
             if trade_count >= max_trades_per_day:
                 break
 
-            # ── No new entries after 2 PM ──
-            if candle_hour_min >= no_entry_cutoff:
+            # No entries after 2 PM
+            if bar_mins >= no_entry_cutoff:
                 continue
+
+            # Daily loss limit already hit from previous trade(s)
+            if day_realized_pnl <= -dll:
+                logger.info(f"[BACKTEST] {trading_date} day loss limit hit (₹{day_realized_pnl:.0f}) — no more trades.")
+                break
 
             for name, sm in setups.items():
                 if open_trade:
                     break
                 triggered, details = sm.update(candle, idx, levels)
+                if not (triggered and details):
+                    continue
 
-                if triggered and details:
-                    # Daily loss limit check — same as live bot
-                    if day_realized_loss <= -abs(dll):
-                        logger.info(f"[BACKTEST] {trading_date} Daily loss limit ₹{dll} hit — skipping further trades.")
-                        break
+                entry_price = candle["close"]
+                sl = details["stop_loss"]
+                tp = details["take_profit"]
+                trade_type  = details["trade_type"]
 
-                    entry_price = candle["close"]
-                    sl = details["stop_loss"]
-                    tp = details["take_profit"]
-                    trade_type = details["trade_type"]
+                # Simulate exit — with loss cap built in
+                exit_info = _simulate_exit(
+                    candles, idx, entry_price, sl, tp,
+                    trade_type, lots, day_realized_pnl, dll
+                )
 
-                    # Simulate exit
-                    exit_info = _simulate_exit(
-                        candles, idx, entry_price, sl, tp, trade_type
-                    )
+                trade_rec = {
+                    "date":        str(trading_date),
+                    "setup_name":  name,
+                    "trade_type":  trade_type,
+                    "option_type": "PE" if trade_type == "SELL" else "CE",
+                    "entry_price": round(entry_price, 2),
+                    "stop_loss":   round(sl, 2),
+                    "take_profit": round(tp, 2),
+                    "exit_price":  exit_info["exit_price"],
+                    "status":      exit_info["status"],
+                    "pnl":         exit_info["pnl"],
+                    "entry_time":  candle["time"],
+                    "exit_time":   exit_info["exit_time"],
+                    "cpr_r1":      levels.r1,
+                    "cpr_tc":      levels.tc,
+                    "cpr_bc":      levels.bc,
+                    "cpr_s1":      levels.s1,
+                    "cpr_pivot":   levels.pivot,
+                }
+                day_trades.append(trade_rec)
+                all_trades.append(trade_rec)
+                trade_count      += 1
+                day_realized_pnl += exit_info["pnl"]
+                open_trade        = trade_rec   # mark as active until exit_time reached
 
-                    trade_rec = {
-                        "date":        str(trading_date),
-                        "setup_name":  name,
-                        "trade_type":  trade_type,
-                        "option_type": "PE" if trade_type == "SELL" else "CE",
-                        "entry_price": round(entry_price, 2),
-                        "stop_loss":   round(sl, 2),
-                        "take_profit": round(tp, 2),
-                        "exit_price":  exit_info["exit_price"],
-                        "status":      exit_info["status"],
-                        "pnl":         exit_info["pnl"],
-                        "entry_time":  candle["time"],
-                        "exit_time":   exit_info["exit_time"],
-                        "cpr_r1":      levels.r1,
-                        "cpr_tc":      levels.tc,
-                        "cpr_bc":      levels.bc,
-                        "cpr_s1":      levels.s1,
-                        "cpr_pivot":   levels.pivot,
-                    }
-                    day_trades.append(trade_rec)
-                    all_trades.append(trade_rec)
-                    trade_count += 1
-                    open_trade = trade_rec
-                    # Accumulate realized P&L for loss limit check on next trade
-                    day_realized_loss += exit_info["pnl"]
-                    logger.info(
-                        f"[BACKTEST] {trading_date} {name} {trade_type} "
-                        f"Entry={entry_price} SL={sl} TP={tp} → {exit_info['status']} PNL=₹{exit_info['pnl']}"
-                    )
-
-            # open_trade clearance is handled at the top of the loop
+                logger.info(
+                    f"[BACKTEST] {trading_date} {name} {trade_type} "
+                    f"Entry={entry_price} SL={sl} TP={tp} → "
+                    f"{exit_info['status']} PNL=₹{exit_info['pnl']} "
+                    f"DayPNL=₹{day_realized_pnl:.0f}"
+                )
 
         # Day summary
-        day_pnl = sum(t["pnl"] for t in day_trades)
+        day_pnl  = sum(t["pnl"] for t in day_trades)
         day_wins = sum(1 for t in day_trades if t["status"] == "CLOSED_TP")
-        day_losses = sum(1 for t in day_trades if t["status"] == "CLOSED_SL")
+        day_loss = sum(1 for t in day_trades if t["status"] in ("CLOSED_SL","CLOSED_SL_LIMIT"))
         day_summaries.append({
-            "date":         str(trading_date),
-            "trades":       len(day_trades),
-            "wins":         day_wins,
-            "losses":       day_losses,
-            "eod_exits":    len(day_trades) - day_wins - day_losses,
-            "net_pnl":      round(day_pnl, 2),
-            "cpr_r1":       levels.r1,
-            "cpr_tc":       levels.tc,
-            "cpr_bc":       levels.bc,
-            "cpr_s1":       levels.s1,
+            "date":      str(trading_date),
+            "trades":    len(day_trades),
+            "wins":      day_wins,
+            "losses":    day_loss,
+            "eod_exits": len(day_trades) - day_wins - day_loss,
+            "net_pnl":   round(day_pnl, 2),
+            "cpr_r1":    levels.r1,
+            "cpr_tc":    levels.tc,
+            "cpr_bc":    levels.bc,
+            "cpr_s1":    levels.s1,
         })
 
-    # Overall metrics
-    total = len(all_trades)
-    wins  = sum(1 for t in all_trades if t["status"] == "CLOSED_TP")
-    losses= sum(1 for t in all_trades if t["status"] == "CLOSED_SL")
-    eod   = total - wins - losses
+    # Aggregate metrics
+    total   = len(all_trades)
+    wins    = sum(1 for t in all_trades if t["status"] == "CLOSED_TP")
+    losses  = sum(1 for t in all_trades if t["status"] in ("CLOSED_SL","CLOSED_SL_LIMIT"))
+    eod     = total - wins - losses
     net_pnl = round(sum(t["pnl"] for t in all_trades), 2)
-    gross_profit = round(sum(t["pnl"] for t in all_trades if t["pnl"] > 0), 2)
-    gross_loss   = round(sum(t["pnl"] for t in all_trades if t["pnl"] < 0), 2)
 
-    # Per-setup breakdown
     setup_stats: Dict[str, Any] = {}
-    for sname in ["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"]:
+    for sname in ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]:
         st = [t for t in all_trades if t["setup_name"] == sname]
         sw = sum(1 for t in st if t["status"] == "CLOSED_TP")
         setup_stats[sname] = {
             "trades":   len(st),
             "wins":     sw,
-            "losses":   sum(1 for t in st if t["status"] == "CLOSED_SL"),
+            "losses":   sum(1 for t in st if t["status"] in ("CLOSED_SL","CLOSED_SL_LIMIT")),
             "win_rate": round(sw / len(st) * 100, 1) if st else 0.0,
             "net_pnl":  round(sum(t["pnl"] for t in st), 2),
         }
 
     return {
-        "start_date":    str(start_date),
-        "end_date":      str(end_date),
-        "days_processed": len(days) - len(skipped_days),
-        "days_skipped":  skipped_days,
+        "start_date":      str(start_date),
+        "end_date":        str(end_date),
+        "days_processed":  len(days) - len(skipped_days),
+        "days_skipped":    skipped_days,
         "metrics": {
-            "total_trades":  total,
-            "wins":          wins,
-            "losses":        losses,
-            "eod_exits":     eod,
-            "win_rate":      round(wins / total * 100, 1) if total else 0.0,
-            "net_pnl":       net_pnl,
-            "gross_profit":  gross_profit,
-            "gross_loss":    gross_loss,
-            "avg_pnl_per_trade": round(net_pnl / total, 2) if total else 0.0,
+            "total_trades":       total,
+            "wins":               wins,
+            "losses":             losses,
+            "eod_exits":          eod,
+            "win_rate":           round(wins / total * 100, 1) if total else 0.0,
+            "net_pnl":            net_pnl,
+            "gross_profit":       round(sum(t["pnl"] for t in all_trades if t["pnl"] > 0), 2),
+            "gross_loss":         round(sum(t["pnl"] for t in all_trades if t["pnl"] < 0), 2),
+            "avg_pnl_per_trade":  round(net_pnl / total, 2) if total else 0.0,
+            "daily_loss_limit":   dll,
         },
         "setup_breakdown": setup_stats,
         "day_summaries":   day_summaries,
