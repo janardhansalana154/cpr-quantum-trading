@@ -1,587 +1,706 @@
 import requests
 import logging
 from typing import Dict, List, Optional, Tuple, Literal
-from datetime import datetime, date, timedelta, time
-from zoneinfo import ZoneInfo
+from datetime import datetime, date, timedelta, timezone
+from urllib.parse import quote
 from config.settings import settings
 
 logger = logging.getLogger("CPR_System.Upstox")
 
+# ---------------------------------------------------------------------------
+# NSE Market Hours helper (IST = UTC+05:30)
+# ---------------------------------------------------------------------------
+_IST = timezone(timedelta(hours=5, minutes=30))
 
+# NSE holidays 2025-2026 — add/remove as needed
+_NSE_HOLIDAYS = {
+    "2025-01-26","2025-02-26","2025-03-14","2025-03-31",
+    "2025-04-10","2025-04-14","2025-04-18","2025-05-01",
+    "2025-08-15","2025-08-27","2025-10-02","2025-10-20",
+    "2025-10-23","2025-11-05","2025-11-14","2025-12-25",
+    "2026-01-26","2026-03-19","2026-04-02","2026-04-03",
+    "2026-04-14","2026-04-17","2026-05-01","2026-08-15",
+    "2026-10-02","2026-10-08","2026-10-09","2026-11-04",
+    "2026-12-25",
+}
+
+def is_market_open() -> bool:
+    now = datetime.now(_IST)
+    if now.weekday() >= 5:
+        return False
+    if now.strftime("%Y-%m-%d") in _NSE_HOLIDAYS:
+        return False
+    open_t  = now.replace(hour=9,  minute=15, second=0, microsecond=0)
+    close_t = now.replace(hour=15, minute=30, second=0, microsecond=0)
+    return open_t <= now <= close_t
+
+def get_market_status_detail() -> dict:
+    now = datetime.now(_IST)
+    return {
+        "market_open":   is_market_open(),
+        "market_status": "OPEN" if is_market_open() else "CLOSED",
+        "current_ist":   now.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
+        "weekday":       now.strftime("%A"),
+        "is_holiday":    now.strftime("%Y-%m-%d") in _NSE_HOLIDAYS,
+    }
+
+# ---------------------------------------------------------------------------
+# Token expiry helper
+# Upstox tokens expire at MIDNIGHT IST every day — NOT 24h rolling.
+# ---------------------------------------------------------------------------
+def _token_expires_at_midnight_ist(authenticated_at: datetime) -> datetime:
+    """Returns the midnight IST cutoff after the day the token was issued."""
+    auth_ist = authenticated_at.replace(tzinfo=timezone.utc).astimezone(_IST)
+    midnight_ist = auth_ist.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return midnight_ist.astimezone(timezone.utc).replace(tzinfo=None)  # back to naive UTC
+
+def _is_token_expired(last_auth: datetime) -> bool:
+    """True if the Upstox token has crossed its midnight-IST expiry."""
+    expiry_utc = _token_expires_at_midnight_ist(last_auth)
+    return datetime.utcnow() >= expiry_utc
+
+
+# ---------------------------------------------------------------------------
+# UpstoxClient
+# ---------------------------------------------------------------------------
 class UpstoxClient:
     def __init__(self):
-        import os
-        import json
-        self.api_key = settings.UPSTOX_API_KEY
+        import os, json
+        self.api_key    = settings.UPSTOX_API_KEY
         self.api_secret = settings.UPSTOX_API_SECRET
         self.redirect_uri = settings.UPSTOX_REDIRECT_URI
-        self.access_token: Optional[str] = None
-        self.base_url = "https://api.upstox.com/v2"
+        self.base_url   = "https://api.upstox.com/v2"
 
-        # Track last live candle metadata for dashboard status cards
+        # In-memory token cache — cleared on 401 or midnight expiry
+        self._access_token: Optional[str] = None
+        self._token_loaded_at: Optional[datetime] = None   # when we last loaded/stored it
+
+        # Dashboard status fields
         self.last_live_candle_time: Optional[str] = None
-        self.last_cmp_update_time: Optional[str] = None
-        # Cache the last successfully fetched LTP so the dashboard can show
-        # the most recently known CMP even when live fetching fails.
-        self.last_known_ltp: Optional[float] = None
-        self.cmp_source: str = "DISCONNECTED"
         self.websocket_status: str = "Disconnected"
-        self.data_source: str = "DISCONNECTED"  # "UPSTOX LIVE" | "HISTORICAL REPLAY" | "SIMULATION" | "DISCONNECTED"
-        self.market_status: str = "CLOSED"
+        self.data_source: str = "DISCONNECTED"
 
-        # Dynamically load saved client credentials if configured via UI dashboard
+        # Load saved API credentials (written by /api/config)
         secrets_path = getattr(settings, "UPSTOX_SECRETS_PATH", None)
         if secrets_path and os.path.exists(secrets_path):
             try:
-                with open(secrets_path, "r") as f:
-                    secrets = json.load(f)
-                    if secrets.get("api_key"):
-                        self.api_key = secrets["api_key"]
-                        settings.UPSTOX_API_KEY = secrets["api_key"]
-                    if secrets.get("api_secret"):
-                        self.api_secret = secrets["api_secret"]
-                        settings.UPSTOX_API_SECRET = secrets["api_secret"]
-                logger.info(f"Successfully loaded dynamic Upstox Client credentials from {secrets_path}")
+                with open(secrets_path) as f:
+                    s = json.load(f)
+                if s.get("api_key"):
+                    self.api_key = s["api_key"]
+                    settings.UPSTOX_API_KEY = s["api_key"]
+                if s.get("api_secret"):
+                    self.api_secret = s["api_secret"]
+                    settings.UPSTOX_API_SECRET = s["api_secret"]
+                logger.info(f"Loaded Upstox credentials from {secrets_path}")
             except Exception as e:
-                logger.error(f"Failed to load dynamic credentials from {secrets_path}: {e}")
+                logger.error(f"Failed to load credentials: {e}")
+
+    # ------------------------------------------------------------------
+    # Token management
+    # ------------------------------------------------------------------
+    def _clear_token(self):
+        """Wipe the in-memory token so the next call re-loads from DB."""
+        self._access_token = None
+        self._token_loaded_at = None
+        self.data_source = "DISCONNECTED"
+        self.websocket_status = "Disconnected"
 
     def get_token(self) -> Optional[str]:
-        """Loads and returns active access token, checking DB if memory is stale or uninitialized."""
-        if self.access_token:
-            return self.access_token
+        """
+        Returns a valid access token, or None.
 
+        FIX 1: Check midnight-IST expiry, not just 24h rolling window.
+        FIX 2: Always re-read from DB when in-memory token is absent (handles server restarts).
+        FIX 3: Clear stale cached token when expiry detected.
+        """
+        # If we have a cached token, verify it hasn't crossed midnight IST
+        if self._access_token and self._token_loaded_at:
+            if _is_token_expired(self._token_loaded_at):
+                logger.warning(
+                    "[TOKEN] In-memory token has crossed Upstox midnight-IST expiry. "
+                    "Clearing cache — re-authenticate via dashboard."
+                )
+                self._clear_token()
+                return None
+            return self._access_token
+
+        # No cached token — try to load from DB
         from database.db import SessionLocal
-        from database.models import UpstoxToken
         if SessionLocal is None:
             return None
 
         db = SessionLocal()
         try:
+            from database.models import UpstoxToken
             tok = db.query(UpstoxToken).order_by(UpstoxToken.id.desc()).first()
-            if tok and tok.access_token:
-                last_auth = tok.last_authenticated_at or tok.created_at
-                if (datetime.utcnow() - last_auth) < timedelta(hours=24):
-                    self.access_token = tok.access_token
-                    return self.access_token
-                else:
-                    logger.warning("DB Upstox token has expired (older than 24 hours).")
+            if not tok or not tok.access_token:
+                return None
+
+            last_auth = tok.last_authenticated_at or tok.created_at
+            if last_auth is None:
+                return None
+
+            # FIX 1: Use midnight-IST expiry, not 24h rolling
+            if _is_token_expired(last_auth):
+                logger.warning(
+                    "[TOKEN] DB token has crossed Upstox midnight-IST expiry. "
+                    "Re-authenticate via dashboard."
+                )
+                return None
+
+            # Token is valid — cache it
+            self._access_token = tok.access_token
+            self._token_loaded_at = last_auth
+            logger.info("[TOKEN] Valid token loaded from DB.")
+            return self._access_token
+
         except Exception as e:
-            logger.error(f"Error retrieving Upstox access token from SQL DB: {e}")
+            logger.error(f"Error loading token from DB: {e}")
+            return None
         finally:
             db.close()
-        return None
 
-    def _now_ist(self) -> datetime:
-        return datetime.utcnow().astimezone(ZoneInfo("Asia/Kolkata"))
-
-    def is_market_open(self) -> bool:
-        """Returns True when NSE is currently open for intraday trading."""
-        local_dt = self._now_ist()
-        if local_dt.weekday() >= 5:
+    def _is_authenticated(self) -> bool:
+        """True only when token is valid and credentials are real (not mock defaults)."""
+        if self.api_key in ("mock_api_key", "mock_key", "", None):
             return False
-        open_time = time(9, 15)
-        close_time = time(15, 30)
-        return open_time <= local_dt.time() < close_time
+        return self.get_token() is not None
 
+    # ------------------------------------------------------------------
+    # Connection status (for dashboard)
+    # ------------------------------------------------------------------
     def get_connection_status(self) -> dict:
-        """Evaluates active connection metadata and outputs live status for the React dashboard."""
         from database.db import SessionLocal
-        from database.models import UpstoxToken
+        mkt = get_market_status_detail()
+        base = {
+            "data_source": self.data_source,
+            "last_live_candle_time": self.last_live_candle_time,
+            "websocket_status": self.websocket_status,
+            **mkt,
+        }
 
         if SessionLocal is None:
-            return {
-                "connected": False,
-                "token_status": "Missing",
-                "expiry_status": "No DB Session Engine configured",
-                "last_authenticated": None,
-                "token_preview": "None",
-                "data_source": self.data_source,
-                "last_live_candle_time": self.last_live_candle_time,
-                "websocket_status": self.websocket_status,
-                "market_status": "OPEN" if self.is_market_open() else "CLOSED",
-                "cmp_source": self.cmp_source,
-                "last_cmp_update_time": self.last_cmp_update_time,
-            }
+            return {"connected": False, "token_status": "DB not ready",
+                    "expiry_status": "Database not initialised yet",
+                    "last_authenticated": None, "token_preview": "None", **base}
 
         db = SessionLocal()
         try:
+            from database.models import UpstoxToken
             tok = db.query(UpstoxToken).order_by(UpstoxToken.id.desc()).first()
             if not tok or not tok.access_token:
-                return {
-                    "connected": False,
-                    "token_status": "Missing",
-                    "expiry_status": "Access token not stored, click Connect to pair",
-                    "last_authenticated": None,
-                    "token_preview": "None",
-                    "data_source": self.data_source,
-                    "last_live_candle_time": self.last_live_candle_time,
-                    "websocket_status": self.websocket_status,
-                    "market_status": "OPEN" if self.is_market_open() else "CLOSED",
-                    "cmp_source": self.cmp_source,
-                    "last_cmp_update_time": self.last_cmp_update_time,
-                }
+                return {"connected": False, "token_status": "Missing",
+                        "expiry_status": "No token — click Connect Upstox",
+                        "last_authenticated": None, "token_preview": "None", **base}
 
             last_auth = tok.last_authenticated_at or tok.created_at
-            now = datetime.utcnow()
-            expires_at = last_auth + timedelta(hours=24)
-            time_left = expires_at - now
+            expired = _is_token_expired(last_auth)
+            expiry_utc = _token_expires_at_midnight_ist(last_auth)
+            # Convert to IST for display
+            expiry_ist = expiry_utc.replace(tzinfo=timezone.utc).astimezone(_IST)
 
-            if time_left.total_seconds() <= 0:
+            if expired:
                 status = "Expired"
-                expiry_desc = "Expired (Authentication token older than 24h)"
+                expiry_desc = f"Expired at {expiry_ist.strftime('%H:%M IST')} — reconnect required"
                 connected = False
             else:
+                time_left = expiry_utc - datetime.utcnow()
+                h = int(time_left.total_seconds() // 3600)
+                m = int((time_left.total_seconds() % 3600) // 60)
                 status = "Active"
-                hours = int(time_left.total_seconds() // 3600)
-                minutes = int((time_left.total_seconds() % 3600) // 60)
-                expiry_desc = f"Active (Valid for {hours} hours, {minutes} minutes)"
+                expiry_desc = f"Active — expires {expiry_ist.strftime('%H:%M IST')} ({h}h {m}m left)"
                 connected = True
+                base["data_source"] = "UPSTOX LIVE"
+                base["websocket_status"] = "Connected"
 
-            token_preview = tok.access_token[:8] + "..." + tok.access_token[-8:] if len(tok.access_token) > 16 else "Valid Token"
-
+            preview = tok.access_token[:8] + "..." + tok.access_token[-8:] if len(tok.access_token) > 16 else "Valid"
             return {
                 "connected": connected,
                 "token_status": status,
                 "expiry_status": expiry_desc,
-                "expires_at": expires_at.isoformat(),
-                "last_authenticated": last_auth.isoformat() if last_auth else None,
-                "token_preview": token_preview,
-                "data_source": self.data_source,
-                "last_live_candle_time": self.last_live_candle_time,
-                "websocket_status": self.websocket_status,
-                "market_status": "OPEN" if self.is_market_open() else "CLOSED",
-                "cmp_source": self.cmp_source,
-                "last_cmp_update_time": self.last_cmp_update_time,
+                "expires_at": expiry_utc.isoformat(),
+                "last_authenticated": last_auth.isoformat(),
+                "token_preview": preview,
+                **base,
             }
         except Exception as e:
-            logger.error(f"Error pulling custom Upstox state properties: {e}")
-            return {
-                "connected": False,
-                "token_status": "Database Error",
-                "expiry_status": str(e),
-                "last_authenticated": None,
-                "token_preview": "Error",
-                "data_source": self.data_source,
-                "last_live_candle_time": self.last_live_candle_time,
-                "websocket_status": self.websocket_status,
-                "market_status": "OPEN" if self.is_market_open() else "CLOSED",
-                "cmp_source": self.cmp_source,
-                "last_cmp_update_time": self.last_cmp_update_time,
-            }
+            logger.error(f"get_connection_status error: {e}")
+            return {"connected": False, "token_status": "Error",
+                    "expiry_status": str(e), "last_authenticated": None,
+                    "token_preview": "Error", **base}
         finally:
             db.close()
 
+    def ensure_authenticated(self) -> bool:
+        """Load a valid token from DB and mark Upstox as live if available."""
+        token = self.get_token()
+        if token is None:
+            self.data_source = "DISCONNECTED"
+            self.websocket_status = "Disconnected"
+            return False
+
+        self.data_source = "UPSTOX LIVE"
+        self.websocket_status = "Connected"
+        return True
+
+    # ------------------------------------------------------------------
+    # OAuth
+    # ------------------------------------------------------------------
     def get_login_url(self, override_redirect_uri: Optional[str] = None) -> str:
-        """Generates the URL to redirect the user to for OAuth consent."""
         r_uri = override_redirect_uri or self.redirect_uri
-        logger.info(f"Generating OAuth Login Redirect flow with CLIENT_ID: {self.api_key} and REDIRECT_URI: {r_uri}")
-        return f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={self.api_key}&redirect_uri={r_uri}"
+        logger.info(f"OAuth login URL: client_id={self.api_key} redirect={r_uri}")
+        return (f"https://api.upstox.com/v2/login/authorization/dialog"
+                f"?response_type=code&client_id={self.api_key}&redirect_uri={r_uri}")
 
     def authenticate(self, auth_code: str, redirect_uri: Optional[str] = None) -> bool:
-        """Exchanges auth code for an access token and stores it persistently in the database."""
+        """Exchange auth code for access token and persist to DB."""
         url = f"{self.base_url}/login/authorization/token"
-        headers = {
-            "Content-Type": "application/x-www-form-urlencoded",
-            "Accept": "application/json"
-        }
         r_uri = redirect_uri or self.redirect_uri
         data = {
             "code": auth_code,
             "client_id": self.api_key,
             "client_secret": self.api_secret,
             "redirect_uri": r_uri,
-            "grant_type": "authorization_code"
+            "grant_type": "authorization_code",
         }
+        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
 
         try:
-            logger.info("Initiating Upstox API token exchange process with authorization code.")
-            response = requests.post(url, data=data, headers=headers, timeout=10)
-            if response.status_code == 200:
-                resp_json = response.json()
-                self.access_token = resp_json.get("access_token")
-                logger.info("[LIVE] Connected to Upstox — OAuth token exchange successful.")
+            resp = requests.post(url, data=data, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                token = resp.json().get("access_token")
+                if not token:
+                    logger.error("OAuth response missing access_token")
+                    return False
 
+                # Persist to DB
                 from database.db import SessionLocal
                 from database.models import UpstoxToken
                 if SessionLocal:
                     db = SessionLocal()
                     try:
                         db.query(UpstoxToken).delete()
-                        new_tok = UpstoxToken(
-                            access_token=self.access_token,
+                        now = datetime.utcnow()
+                        expiry_at = _token_expires_at_midnight_ist(now)
+                        db.add(UpstoxToken(
+                            access_token=token,
                             status="Connected",
-                            last_authenticated_at=datetime.utcnow()
-                        )
-                        db.add(new_tok)
+                            expiry_time=expiry_at,
+                            last_authenticated_at=now,
+                        ))
                         db.commit()
-                        logger.info("Upstox token records written successfully to database.")
-                    except Exception as sqle:
-                        logger.error(f"SQL database update failed during access token registration: {sqle}")
+                        logger.info("[TOKEN] Token persisted to DB.")
+                    except Exception as e:
+                        logger.error(f"DB token write error: {e}")
                     finally:
                         db.close()
+
+                # Cache in memory
+                self._access_token = token
+                self._token_loaded_at = datetime.utcnow()
+                self.data_source = "UPSTOX LIVE"
+                self.websocket_status = "Connected"
+                logger.info("[LIVE] Upstox authenticated successfully.")
                 return True
             else:
-                logger.error(f"Upstox OAuth Authorization Handshake Failed (HTTP {response.status_code}): {response.text}")
+                logger.error(f"OAuth failed (HTTP {resp.status_code}): {resp.text}")
                 return False
         except Exception as e:
-            logger.error(f"Upstox network exchange failed with terminal error: {e}")
+            logger.error(f"OAuth network error: {e}")
             return False
 
-    def _is_mock_mode(self) -> bool:
-        """Returns True when there is no valid token or credentials are still at default mock values."""
-        token = self.get_token()
-        if not token:
-            return True
-        if self.api_key in ("mock_api_key", "mock_key", ""):
-            return True
-        return False
-
+    # ------------------------------------------------------------------
+    # Live data methods
+    # ------------------------------------------------------------------
     def get_nifty_ohlc_5m(self) -> List[Dict]:
         """
-        Fetches today's 1-minute intraday candles from Upstox and aggregates
-        them into 5-minute candles aligned to market open (09:15 IST).
-        Upstox intraday endpoint only supports 1minute and 30minute intervals —
-        there is no native 5minute interval, so we build it ourselves.
-        Falls back to mock data only when unauthenticated.
+        Fetch today's completed 5-minute NIFTY candles from Upstox.
+
+        FIX: URL-encode the instrument key so '|' and ' ' are safe in the path.
+        FIX: Clear token on 401 so subsequent calls force re-auth.
+        RULE 3: Return [] on any failure — no mock/simulation fallback ever.
+
+        Endpoint: GET /v2/historical-candle/intraday/{instrument_key}/1minute
+        Upstox candle format: [timestamp, open, high, low, close, volume, oi]
+        Newest candle first — reversed to chronological order before aggregation.
         """
-        if self._is_mock_mode():
-            logger.warning(
-                "Upstox client is unauthenticated or credentials are still at default mock values. "
-                "Live data unavailable — DISCONNECTED. Strategy execution must pause until valid credentials are provided."
-            )
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — no candles fetched.")
             self.data_source = "DISCONNECTED"
             self.websocket_status = "Disconnected"
-            self.cmp_source = "DISCONNECTED"
-            self.last_live_candle_time = None
             return []
 
         token = self.get_token()
-        instrument_key = "NSE_INDEX|Nifty 50"
-        # Upstox intraday endpoint only supports 1minute and 30minute
+        # FIX: URL-encode the instrument key (| and space must be encoded in URL path)
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
         url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json"
-        }
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                candles_raw = data.get("data", {}).get("candles", [])
-                if not candles_raw:
-                    logger.warning("[LIVE] Upstox returned 0 intraday 1m candles (market may be pre-open or closed).")
+            resp = requests.get(url, headers=headers, timeout=10)
+
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                if not raw:
+                    logger.warning("[LIVE] Upstox returned 0 1m candles (market may be pre-open).")
                     self.data_source = "UPSTOX LIVE"
                     self.websocket_status = "Connected"
-                    self.last_live_candle_time = None
                     return []
 
-                # Parse 1-minute candles — Upstox returns newest first
-                one_min = []
-                for c in candles_raw:
-                    one_min.append({
-                        "time":   c[0],
-                        "open":   float(c[1]),
-                        "high":   float(c[2]),
-                        "low":    float(c[3]),
-                        "close":  float(c[4]),
-                        "volume": int(c[5]),
-                    })
-                one_min.reverse()  # chronological order oldest→newest
+                one_min = [
+                    {"time": c[0], "open": float(c[1]), "high": float(c[2]),
+                     "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
+                    for c in raw
+                ]
+                one_min.reverse()   # Upstox returns newest first → make chronological
 
-                # Aggregate 1m bars into 5m candles
                 five_min = self._aggregate_to_5min(one_min)
-
+                self.data_source = "UPSTOX LIVE"
+                self.websocket_status = "Connected"
                 if five_min:
-                    self.data_source = "UPSTOX LIVE"
-                    self.websocket_status = "Connected"
                     self.last_live_candle_time = five_min[-1]["time"]
                     logger.info(
-                        f"[LIVE] New candle received — {len(five_min)} completed 5m candles built "
-                        f"from {len(one_min)} 1m bars. "
-                        f"Latest close: {five_min[-1]['close']} at {five_min[-1]['time']}"
+                        f"[LIVE] {len(five_min)} 5m candles from {len(one_min)} 1m bars. "
+                        f"Latest: {five_min[-1]['close']} @ {five_min[-1]['time']}"
                     )
-                else:
-                    self.data_source = "UPSTOX LIVE"
-                    self.websocket_status = "Connected"
-                    self.last_live_candle_time = None
-                    logger.warning("[LIVE] No completed 5m candles yet (insufficient 1m bars).")
-
                 return five_min
 
-            elif response.status_code == 401:
-                logger.error("[LIVE] Upstox token rejected (HTTP 401). Re-authenticate via the dashboard.")
-                self.access_token = None
-                self.websocket_status = "Disconnected"
-                self.data_source = "DISCONNECTED"
-                self.cmp_source = "DISCONNECTED"
-                self.last_live_candle_time = None
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Upstox rejected token (401). Clearing cache — re-authenticate.")
+                self._clear_token()
+                self._invalidate_db_token()
                 return []
+
             else:
-                logger.error(
-                    f"[LIVE] Failed to fetch 1m intraday candles (HTTP {response.status_code}): {response.text}"
-                )
-                self.websocket_status = "Disconnected"
+                logger.error(f"[LIVE] Candle fetch failed (HTTP {resp.status_code}): {resp.text}")
                 self.data_source = "DISCONNECTED"
-                self.cmp_source = "DISCONNECTED"
-                self.last_live_candle_time = None
                 return []
 
         except Exception as e:
-            logger.error(f"[LIVE] Network error fetching intraday candles: {e}")
-            self.websocket_status = "Disconnected"
+            logger.error(f"[LIVE] Network error fetching candles: {e}")
             self.data_source = "DISCONNECTED"
-            self.cmp_source = "DISCONNECTED"
-            self.last_live_candle_time = None
             return []
 
     def _aggregate_to_5min(self, one_min_candles: List[Dict]) -> List[Dict]:
         """
-        Aggregates 1-minute candles into 5-minute candles.
-        Bars are aligned to 09:15, 09:20, 09:25 ... IST (standard NSE grid).
-        Only returns fully completed 5m bars (all 5 constituent 1m bars present).
-        The in-progress (current) bar is excluded so strategy only sees closed candles.
+        Aggregate 1-minute bars into 5-minute bars aligned to 09:15 NSE grid.
+        Only returns fully completed bars (skips the last/in-progress bar).
         """
         from collections import defaultdict
         buckets: dict = defaultdict(list)
 
         for c in one_min_candles:
-            ts_str = c["time"]
+            ts = c["time"][:19]
             try:
-                ts_clean = ts_str[:19]  # "2026-05-30T09:15:00"
-                dt = datetime.strptime(ts_clean, "%Y-%m-%dT%H:%M:%S")
+                dt = datetime.strptime(ts, "%Y-%m-%dT%H:%M:%S")
             except ValueError:
                 continue
+            total_m = dt.hour * 60 + dt.minute
+            slot_m = (total_m // 5) * 5
+            bucket = dt.replace(hour=slot_m // 60, minute=slot_m % 60, second=0)
+            buckets[bucket].append(c)
 
-            # Which 5-minute slot does this 1m bar belong to?
-            total_minutes = dt.hour * 60 + dt.minute
-            bucket_minutes = (total_minutes // 5) * 5
-            bucket_dt = dt.replace(
-                hour=bucket_minutes // 60,
-                minute=bucket_minutes % 60,
-                second=0
-            )
-            buckets[bucket_dt].append(c)
-
-        # Build candles — only completed buckets (5 bars)
         five_min = []
-        sorted_keys = sorted(buckets.keys())
-        for i, bucket_dt in enumerate(sorted_keys):
-            bars = buckets[bucket_dt]
-            is_last = (i == len(sorted_keys) - 1)
-            # Skip the last (possibly incomplete/live) bucket
-            if is_last:
+        keys = sorted(buckets)
+        for i, bucket in enumerate(keys):
+            bars = buckets[bucket]
+            if i == len(keys) - 1:  # skip last (possibly incomplete) bar
                 continue
-            if len(bars) < 5:
-                continue  # incomplete historical bucket — skip
-
+            if len(bars) < 5:       # incomplete historical bucket
+                continue
             five_min.append({
-                "time":   bucket_dt.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
+                "time":   bucket.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
                 "open":   bars[0]["open"],
                 "high":   max(b["high"] for b in bars),
                 "low":    min(b["low"]  for b in bars),
                 "close":  bars[-1]["close"],
                 "volume": sum(b["volume"] for b in bars),
             })
-
         return five_min
 
-    def get_nifty_price(self) -> float:
-        """Gets current LTP of Nifty 50 index."""
-        token = self.get_token()
-        if self._is_mock_mode() or not token:
-            logger.warning("Upstox LTP unavailable in disconnected mode. CMP source set to DISCONNECTED.")
-            self.data_source = "DISCONNECTED"
-            self.cmp_source = "DISCONNECTED"
-            self.websocket_status = "Disconnected"
-            self.last_cmp_update_time = None
-            return None
-
-        url = f"{self.base_url}/market-quote/ltp?instrument_key=NSE_INDEX|Nifty 50"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json"
+    def _fetch_intraday_1m_for_date(self, trading_date: date, token: str) -> List[Dict]:
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        params = {
+            "from": trading_date.strftime("%Y-%m-%d 09:15:00"),
+            "to": trading_date.strftime("%Y-%m-%d 15:30:00"),
         }
 
         try:
-            response = requests.get(url, headers=headers, timeout=8)
-            if response.status_code == 200:
-                data = response.json()
-                last_price = data.get("data", {}).get("NSE_INDEX|Nifty 50", {}).get("last_price")
-                if last_price is not None:
-                    # Update cached LTP and metadata
-                    self.last_known_ltp = float(last_price)
-                    self.cmp_source = "UPSTOX_LTP"
-                    self.last_cmp_update_time = datetime.utcnow().isoformat()
-                    self.data_source = "UPSTOX LIVE"
-                    self.websocket_status = "Connected"
-                    logger.info(f"CMP_SOURCE={self.cmp_source} MARKET_OPEN={self.is_market_open()} DATA_SOURCE={self.data_source}")
-                    return float(last_price)
-                logger.warning("Upstox LTP response missing last_price. CMP source set to DISCONNECTED.")
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                if not raw:
+                    logger.warning(f"[HISTORICAL] No 1m candles returned for {trading_date}.")
+                    return []
+                one_min = [
+                    {"time": c[0], "open": float(c[1]), "high": float(c[2]),
+                     "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
+                    for c in raw
+                ]
+                one_min.reverse()
+                return one_min
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Historical candle fetch rejected (401). Clearing cache.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return []
+            else:
+                logger.error(f"[HISTORICAL] Candle fetch failed (HTTP {resp.status_code}): {resp.text}")
+                return []
+        except Exception as e:
+            logger.error(f"[HISTORICAL] Network error fetching candles for {trading_date}: {e}")
+            return []
+
+    def get_nifty_historical_5m_for_day(self, trading_date: date) -> List[Dict]:
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — historical 5m candles skipped.")
+            return []
+
+        token = self.get_token()
+        if token is None:
+            return []
+
+        one_min = self._fetch_intraday_1m_for_date(trading_date, token)
+        return self._aggregate_to_5min(one_min)
+
+    def get_previous_day_ohlc_for_date(self, target_date: date) -> Optional[Dict]:
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
+            return None
+
+        token = self.get_token()
+        if token is None:
+            return None
+
+        from_d = (target_date - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_d = target_date.strftime("%Y-%m-%d")
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_d}/{from_d}"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                previous = None
+                for candle in raw:
+                    if not isinstance(candle, list) or len(candle) < 5:
+                        continue
+                    candle_date = str(candle[0])[:10]
+                    if candle_date >= target_date.strftime("%Y-%m-%d"):
+                        continue
+                    previous = candle
+                    break
+                if previous:
+                    h, l, c = float(previous[2]), float(previous[3]), float(previous[4])
+                    logger.info(f"[HISTORICAL] Prev day OHLC for {target_date}: H={h} L={l} C={c}")
+                    return {"high": h, "low": l, "close": c}
+                logger.warning(f"[HISTORICAL] No prior trading day OHLC returned for {target_date}.")
+                return None
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Prev OHLC call rejected (401). Clearing token.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return None
+            else:
+                logger.error(f"[HISTORICAL] Prev OHLC failed (HTTP {resp.status_code}): {resp.text}")
+                return None
+        except Exception as e:
+            logger.error(f"[HISTORICAL] Error fetching prev OHLC for {target_date}: {e}")
+            return None
+
+    def get_nifty_price(self) -> Optional[float]:
+        """
+        Fetch current Nifty 50 LTP from Upstox.
+
+        FIX: Use params={} so requests URL-encodes the instrument key automatically.
+        FIX: Clear token on 401.
+        RULE 3: Return None if unauthenticated or API error — no fallback value.
+
+        Endpoint: GET /v2/market-quote/ltp
+        Response: {"data": {"NSE_INDEX:Nifty 50": {"last_price": 24105.35}}}
+        Note: Upstox returns ':' not '|' in the response key.
+        """
+        if not self._is_authenticated():
+            logger.debug("[CMP_SOURCE=DISCONNECTED] Not authenticated — LTP skipped.")
+            return None
+
+        token = self.get_token()
+        url = f"{self.base_url}/market-quote/ltp"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        # FIX: Pass as params dict — requests handles URL-encoding automatically
+        params = {"instrument_key": "NSE_INDEX|Nifty 50"}
+
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
+            if resp.status_code == 200:
+                d = resp.json().get("data", {})
+                # Upstox returns the key with ':' in the response body
+                ltp_data = (d.get("NSE_INDEX:Nifty 50")
+                            or d.get("NSE_INDEX|Nifty 50")
+                            or next(iter(d.values()), {}))
+                ltp = ltp_data.get("last_price")
+                if ltp is not None:
+                    logger.info(f"[CMP_SOURCE=UPSTOX_LTP] Nifty LTP: {ltp}")
+                    return float(ltp)
+                logger.warning(f"[LIVE] LTP key not found in response: {d}")
+                return None
+
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] LTP call rejected (401). Clearing token cache.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return None
+            else:
+                logger.error(f"[LIVE] LTP fetch failed (HTTP {resp.status_code}): {resp.text}")
+                return None
+
         except Exception as e:
             logger.error(f"Error fetching LTP: {e}")
-        # On failure to fetch live LTP, keep the previous cached LTP intact
-        # so the dashboard can continue to show the last-known CMP.
-        self.data_source = "DISCONNECTED"
-        self.websocket_status = "Disconnected"
-        # Do not clear `last_known_ltp` here; preserve the last value.
-        # Only clear `last_cmp_update_time` if no cached LTP exists.
-        if not self.last_known_ltp:
-            self.cmp_source = "DISCONNECTED"
-            self.last_cmp_update_time = None
-        else:
-            # Indicate that the source is a cached value
-            self.cmp_source = "CACHED"
-        return None
+            return None
 
     def get_previous_day_ohlc(self) -> Optional[Dict]:
         """
-        Fetches previous trading day's OHLC for Nifty 50 to calculate today's CPR levels.
-        Returns dict with keys: high, low, close — or None on failure.
+        Fetch previous trading day OHLC for CPR calculation.
+        FIX: URL-encode instrument key in path.
+        RULE 3: Return None if unauthenticated — no hardcoded fallback.
+
+        Endpoint: GET /v2/historical-candle/{instrument_key}/day/{to}/{from}
+        Candle format: [timestamp, open, high, low, close, volume, oi]
+        Newest first.
         """
-        token = self.get_token()
-        if self._is_mock_mode():
-            logger.warning("Mock mode: using hardcoded previous day OHLC for CPR calculation.")
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
             return None
 
-        today = date.today()
-        # Get the last 2 trading days' daily candles
-        from_date = (today - timedelta(days=5)).strftime("%Y-%m-%d")
-        to_date = today.strftime("%Y-%m-%d")
-        instrument_key = "NSE_INDEX|Nifty 50"
-        url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_date}/{from_date}"
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json"
-        }
+        token = self.get_token()
+        today = datetime.now(_IST).date()
+        from_d = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # wider window for holidays
+        to_d = today.strftime("%Y-%m-%d")
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_d}/{from_d}"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
         try:
-            response = requests.get(url, headers=headers, timeout=10)
-            if response.status_code == 200:
-                data = response.json()
-                candles_raw = data.get("data", {}).get("candles", [])
-                # Sorted newest first by Upstox; skip today (index 0), take yesterday (index 1)
-                if len(candles_raw) >= 2:
-                    prev = candles_raw[1]  # [timestamp, open, high, low, close, vol, oi]
-                    logger.info(
-                        f"[LIVE] Previous day OHLC fetched for CPR: H={prev[2]}, L={prev[3]}, C={prev[4]}"
-                    )
-                    return {"high": float(prev[2]), "low": float(prev[3]), "close": float(prev[4])}
-                elif len(candles_raw) == 1:
-                    prev = candles_raw[0]
-                    return {"high": float(prev[2]), "low": float(prev[3]), "close": float(prev[4])}
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                previous = None
+                for candle in raw:
+                    if not isinstance(candle, list) or len(candle) < 5:
+                        continue
+                    candle_date = str(candle[0])[:10]
+                    if candle_date >= today.strftime("%Y-%m-%d"):
+                        continue
+                    previous = candle
+                    break
+
+                if previous:
+                    h, l, c = float(previous[2]), float(previous[3]), float(previous[4])
+                    logger.info(f"[LIVE] Prev day OHLC: H={h} L={l} C={c}")
+                    return {"high": h, "low": l, "close": c}
+
+                logger.warning("[LIVE] No prior trading day OHLC returned for prev OHLC.")
+                return None
+
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Prev OHLC call rejected (401). Clearing token.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return None
+            else:
+                logger.error(f"[LIVE] Prev OHLC failed (HTTP {resp.status_code}): {resp.text}")
+                return None
+
         except Exception as e:
-            logger.error(f"Error fetching previous day OHLC: {e}")
-        return None
+            logger.error(f"Error fetching prev OHLC: {e}")
+            return None
+
+    def _invalidate_db_token(self):
+        """Mark the DB token as expired so the UI shows correct state."""
+        try:
+            from database.db import SessionLocal
+            from database.models import UpstoxToken
+            if SessionLocal is None:
+                return
+            db = SessionLocal()
+            try:
+                tok = db.query(UpstoxToken).order_by(UpstoxToken.id.desc()).first()
+                if tok:
+                    tok.status = "Expired"
+                    db.commit()
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error(f"Error invalidating DB token: {e}")
 
     def select_atm_option(self, nifty_price: float, trade_type: Literal["BUY", "SELL"]) -> Tuple[str, float, str]:
-        """Determines the ATM Strike, Option Contract Symbol, and type (CE/PE)."""
-        strike_price = round(nifty_price / 50) * 50
-        option_type = "CE" if trade_type == "BUY" else "PE"
-        expiry_str = self._get_nearest_weekly_expiry_str()
-        option_symbol = f"NIFTY{expiry_str}{int(strike_price)}{option_type}"
-        return option_symbol, float(strike_price), option_type
+        strike = round(nifty_price / 50) * 50
+        opt_type = "CE" if trade_type == "BUY" else "PE"
+        expiry = self._get_nearest_weekly_expiry_str()
+        return f"NIFTY{expiry}{int(strike)}{opt_type}", float(strike), opt_type
 
     def place_order(self, option_symbol: str, action: Literal["BUY", "SELL"], lots: int, paper: bool = True) -> Dict:
-        """Places a market order. Paper mode returns a mock response."""
-        qty = lots * settings.NIFTY_LOT_SIZE
-
+        qty = lots * 75
         if paper:
             logger.info(f"[PAPER ORDER] {action} {qty} units of {option_symbol}")
             return {
                 "status": "success",
                 "order_id": f"PAPER-{int(datetime.utcnow().timestamp())}",
-                "avg_price": self._get_mock_option_price(option_symbol),
-                "message": "Paper order processed successfully"
+                "avg_price": 120.50,
+                "message": "Paper order processed",
             }
 
-        url = f"{self.base_url}/order/place"
         token = self.get_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-            "Accept": "application/json"
-        }
-        payload = {
-            "quantity": qty,
-            "product": "I",
-            "validity": "DAY",
-            "price": 0.0,
-            "tag": "cpr-bot",
-            "instrument_token": f"NSE_FO|{option_symbol}",
-            "order_type": "MARKET",
-            "transaction_type": action,
-            "disclosed_quantity": 0,
-            "trigger_price": 0.0,
-            "is_amo": False
-        }
+        if not token:
+            return {"status": "error", "message": "No valid auth token for live order"}
 
+        url = f"{self.base_url}/order/place"
+        headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json", "Accept": "application/json"}
+        payload = {
+            "quantity": qty, "product": "I", "validity": "DAY",
+            "price": 0.0, "tag": "cpr-bot",
+            "instrument_token": f"NSE_FO|{option_symbol}",
+            "order_type": "MARKET", "transaction_type": action,
+            "disclosed_quantity": 0, "trigger_price": 0.0, "is_amo": False,
+        }
         try:
-            logger.info(f"[LIVE] Placing LIVE Upstox order: {action} {qty} units of {option_symbol}")
-            response = requests.post(url, json=payload, headers=headers, timeout=10)
-            if response.status_code == 200:
-                resp_json = response.json()
-                order_id = resp_json.get("data", {}).get("order_id", "LIVE-ORDER-X")
-                avg_price = self._get_executed_order_price(order_id)
-                return {
-                    "status": "success",
-                    "order_id": order_id,
-                    "avg_price": avg_price if avg_price > 0 else 100.0,
-                    "message": "Live order executed."
-                }
+            resp = requests.post(url, json=payload, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                order_id = resp.json().get("data", {}).get("order_id", "LIVE-X")
+                avg = self._get_executed_order_price(order_id)
+                return {"status": "success", "order_id": order_id,
+                        "avg_price": avg if avg > 0 else 100.0, "message": "Live order executed."}
+            elif resp.status_code == 401:
+                self._clear_token()
+                self._invalidate_db_token()
+                return {"status": "error", "message": "Token expired during order placement"}
             else:
-                logger.error(f"Upstox live order placement failed: {response.text}")
-                return {"status": "error", "message": f"Upstox failure: {response.text}"}
+                logger.error(f"Live order failed: {resp.text}")
+                return {"status": "error", "message": resp.text}
         except Exception as e:
-            logger.error(f"Exception during live order placement: {e}")
             return {"status": "error", "message": str(e)}
 
     def _get_executed_order_price(self, order_id: str) -> float:
-        """Fetches the actual execution average price of an order ID."""
         token = self.get_token()
         if not token:
             return 100.0
-
-        url = f"{self.base_url}/order/history?order_id={order_id}"
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
         try:
-            response = requests.get(url, headers=headers, timeout=8)
-            if response.status_code == 200:
-                orders = response.json().get("data", [])
+            resp = requests.get(
+                f"{self.base_url}/order/history?order_id={order_id}",
+                headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
+                timeout=8,
+            )
+            if resp.status_code == 200:
+                orders = resp.json().get("data", [])
                 if orders:
                     return float(orders[0].get("average_price", 0.0))
         except Exception as e:
-            logger.error(f"Error fetching order price history: {e}")
+            logger.error(f"Error fetching order price: {e}")
         return 0.0
 
     def _get_nearest_weekly_expiry_str(self) -> str:
-        today = datetime.today()
-        return today.strftime("%y%b%d").upper()
-
-    def _get_mock_option_price(self, option_symbol: str) -> float:
-        return 120.50
-
-    def _generate_mock_candles(self) -> List[Dict]:
-        """Fallback simulation candles — used ONLY when unauthenticated."""
-        import numpy as np
-        np.random.seed(42)
-        prices = [19450.0]
-        for _ in range(30):
-            prices.append(prices[-1] + np.random.normal(0, 15))
-
-        candles = []
-        base_time = datetime.now()
-        for i, p in enumerate(prices):
-            o = p
-            c = p + np.random.normal(0, 5)
-            h = max(o, c) + abs(np.random.normal(0, 4))
-            l = min(o, c) - abs(np.random.normal(0, 4))
-            candles.append({
-                "time": base_time.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
-                "open": round(o, 2),
-                "high": round(h, 2),
-                "low": round(l, 2),
-                "close": round(c, 2),
-                "volume": 12000 + int(np.random.randint(0, 5000))
-            })
-        return candles
+        return datetime.today().strftime("%y%b%d").upper()

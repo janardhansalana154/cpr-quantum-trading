@@ -48,7 +48,6 @@ class RiskManager:
         4. Day status is not explicitly blocked.
         """
         state = self.get_or_create_daily_state()
-        logger.info(f"TRADES_TODAY={state.trade_count}/{self.max_trades} REALIZED_PNL=₹{state.realized_pnl:.2f} BLOCKED={state.is_blocked}")
         
         # 1. Position checking
         if self.check_open_position():
@@ -124,7 +123,7 @@ class RiskManager:
             
         state = self.get_or_create_daily_state()
         
-        qty = trade.lots * settings.NIFTY_LOT_SIZE
+        qty = trade.lots * 75  # Nifty option lot size is 75
         pnl = 0.0
         
         # In Indian option trading: Options are ALWAYS BOUGHT to execute strategy directives.

@@ -21,14 +21,13 @@ def calculate_cpr_levels(high: float, low: float, close: float) -> CPRLevels:
     R1 = (2 * Pivot) - Low
     S1 = (2 * Pivot) - High
     """
-    pivot = (high + low + close) / 3.0
-    mid   = (high + low) / 2.0          # midpoint of High+Low
-    other = pivot + (pivot - mid)        # the other central line
-    # TC must always be the HIGHER value, BC always the LOWER value
-    tc = max(mid, other)
-    bc = min(mid, other)
-    r1 = (2.0 * pivot) - low
-    s1 = (2.0 * pivot) - high
+    pivot   = (high + low + close) / 3.0
+    cpr_mid = (high + low) / 2.0
+    cpr_oth = pivot + (pivot - cpr_mid)
+    tc      = max(cpr_mid, cpr_oth)   # TC always the HIGHER central line
+    bc      = min(cpr_mid, cpr_oth)   # BC always the LOWER central line
+    r1      = (2.0 * pivot) - low
+    s1      = (2.0 * pivot) - high
     
     return CPRLevels(
         pivot=round(pivot, 2),
