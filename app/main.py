@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -410,6 +410,54 @@ def get_recent_trades(db: Session = Depends(get_db)):
             "net_pnl": sum(t.pnl for t in trades),
         },
     }
+
+
+@app.post("/api/trades/{trade_id}/manual-close")
+def manual_close_trade(trade_id: int, data: Dict[str, Any], db: Session = Depends(get_db)):
+    """Mark an active trade CLOSED_MANUAL when you manually exit it in the broker."""
+    trade = db.query(Trade).filter(Trade.id == trade_id, Trade.status == "OPEN").first()
+    if not trade:
+        raise HTTPException(status_code=404, detail="Open trade not found.")
+
+    payload = data or {}
+    exit_price = payload.get("exit_price")
+    if exit_price is None:
+        exit_price = trade.entry_price
+    try:
+        exit_price = float(exit_price)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="exit_price must be numeric.")
+
+    rm = RiskManager(db)
+    closed = rm.register_trade_exit(trade.id, exit_price, "CLOSED_MANUAL")
+    if not closed:
+        raise HTTPException(status_code=500, detail="Failed to close trade.")
+
+    return {
+        "status": "success",
+        "message": "Trade marked closed manually.",
+        "trade_id": closed.id,
+    }
+
+
+@app.post("/api/trading/pause")
+def pause_trading(db: Session = Depends(get_db)):
+    """Pause automated trading for the current day."""
+    rm = RiskManager(db)
+    state = rm.get_or_create_daily_state()
+    state.is_blocked = True
+    db.commit()
+    return {"status": "success", "message": "Trading paused for today."}
+
+
+@app.post("/api/trading/resume")
+def resume_trading(db: Session = Depends(get_db)):
+    """Resume automated trading for the current day."""
+    rm = RiskManager(db)
+    state = rm.get_or_create_daily_state()
+    state.is_blocked = False
+    db.commit()
+    return {"status": "success", "message": "Trading resumed for today."}
 
 
 @app.get("/api/market-status")

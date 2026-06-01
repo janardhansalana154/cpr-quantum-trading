@@ -182,6 +182,63 @@ export default function App() {
     }
   };
 
+  const handleManualCloseTrade = async (trade: DbTrade) => {
+    const suggested = trade.entry_price.toFixed(2);
+    const promptValue = window.prompt(
+      `Mark ${trade.option_symbol} closed manually. Enter exit premium (option price):`,
+      suggested
+    );
+    if (promptValue === null) {
+      return;
+    }
+
+    const trimmed = promptValue.trim();
+    if (trimmed.length === 0) {
+      addLog("WARNING", "Manual close cancelled: exit price required.");
+      return;
+    }
+
+    const exitPrice = parseFloat(trimmed);
+    if (Number.isNaN(exitPrice)) {
+      addLog("ERROR", "Manual close failed: invalid exit price.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/trades/${trade.id}/manual-close`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ exit_price: exitPrice }),
+      });
+      if (!response.ok) {
+        const error = await response.text();
+        addLog("ERROR", `Manual close failed: ${error}`);
+        return;
+      }
+      addLog("SUCCESS", `Trade ${trade.option_symbol} marked CLOSED_MANUAL.`);
+      fetchLiveTrades();
+      fetchLiveStatus();
+    } catch (e: any) {
+      addLog("ERROR", `Manual close error: ${e?.message || e}`);
+    }
+  };
+
+  const handleToggleTradingPause = async (pause: boolean) => {
+    try {
+      const endpoint = pause ? "/api/trading/pause" : "/api/trading/resume";
+      const response = await fetch(endpoint, { method: "POST" });
+      if (!response.ok) {
+        const error = await response.text();
+        addLog("ERROR", `Trading ${pause ? "pause" : "resume"} failed: ${error}`);
+        return;
+      }
+      addLog("SUCCESS", `Trading ${pause ? "paused" : "resumed"} successfully.`);
+      fetchLiveStatus();
+    } catch (e: any) {
+      addLog("ERROR", `Trading ${pause ? "pause" : "resume"} error: ${e?.message || e}`);
+    }
+  };
+
   const fetchLiveStatus = async () => {
     try {
       const res = await fetch("/api/status");
@@ -438,6 +495,15 @@ export default function App() {
   const realTradeCount = liveStatus.daily_summary?.trade_count ?? 0;
   const realMaxTrades  = liveStatus.daily_summary?.max_trades  ?? MAX_TRADES_PER_DAY;
   const realPnL        = liveStatus.daily_summary?.realized_pnl ?? 0;
+  const blockReason = liveStatus.daily_summary
+    ? liveStatus.daily_summary.trade_count >= realMaxTrades
+      ? `Daily trade limit reached (${realTradeCount}/${realMaxTrades} trades)`
+      : realPnL <= -config.lossLimit
+        ? "Daily loss limit reached"
+        : liveStatus.daily_summary.is_blocked
+          ? "Trading paused manually"
+          : null
+    : null;
 
   // CMP: only show live value — null if disconnected
   const currentPrice = liveStatus.nifty_ltp;
@@ -560,6 +626,10 @@ export default function App() {
                 <span className={`w-1.5 h-1.5 rounded-full inline-block ${liveStatus.strategy_allowed ? "bg-emerald-400 animate-pulse" : "bg-rose-400"}`} />
                 {liveStatus.strategy_allowed ? "ALLOWED" : "BLOCKED"}
               </div>
+              <button onClick={() => handleToggleTradingPause(!liveStatus.daily_summary?.is_blocked)}
+                className={`mt-4 w-full text-[10px] font-bold uppercase rounded-lg py-2 transition-all ${liveStatus.daily_summary?.is_blocked ? "bg-emerald-500 text-slate-950 hover:bg-emerald-400" : "bg-rose-500 text-slate-950 hover:bg-rose-400"}`}>
+                {liveStatus.daily_summary?.is_blocked ? "Resume Trading" : "Pause Trading"}
+              </button>
             </div>
 
             {/* RULE 5: NIFTY CMP with source */}
@@ -618,8 +688,8 @@ export default function App() {
                 )}
                 {liveStatus.market_open && upstoxStatus.connected && !liveStatus.strategy_allowed && (
                   <div className="text-amber-300 font-bold">
-                    STRATEGY BLOCKED — Daily trade limit reached
-                    ({realTradeCount}/{realMaxTrades} trades). No further trades today.
+                    STRATEGY BLOCKED — {blockReason ?? "Trading blocked for the day"}.
+                    No further trades today.
                   </div>
                 )}
               </div>
@@ -1065,6 +1135,12 @@ export default function App() {
                         </span>
                       )}
                     </div>
+                    {t.status === "OPEN" && (
+                      <button onClick={() => handleManualCloseTrade(t)}
+                        className="mt-3 w-full text-[10px] font-bold uppercase rounded-lg py-2 bg-rose-500 text-slate-950 hover:bg-rose-400 transition-all">
+                        Manual Close
+                      </button>
+                    )}
                   </div>
                 ))}
               </div>
