@@ -730,6 +730,28 @@ def upstox_session_status(request: Request):
     return status
 
 
+@app.get("/api/debug/cpr")
+def debug_cpr(date: Optional[date] = Query(None, description="Target trading date to inspect (YYYY-MM-DD)")):
+    """Return previous-day OHLC and computed CPR levels for diagnostics.
+
+    If `date` is provided, the previous trading day's OHLC for that date will be fetched.
+    Otherwise the most recent previous-day OHLC is returned.
+    """
+    if upstox is None:
+        raise HTTPException(status_code=503, detail="Server still initialising")
+
+    if date:
+        prev = upstox.get_previous_day_ohlc_for_date(date)
+    else:
+        prev = upstox.get_previous_day_ohlc()
+
+    if not prev:
+        raise HTTPException(status_code=404, detail="Previous-day OHLC not available (authenticate Upstox)")
+
+    levels = calculate_cpr_levels(prev["high"], prev["low"], prev["close"])
+    return {"previous_ohlc": prev, "cpr_levels": levels.dict()}
+
+
 # ------------------------------------------------------------------
 # Helpers
 # ------------------------------------------------------------------
