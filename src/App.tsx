@@ -406,6 +406,30 @@ export default function App() {
   const [reportResult, setReportResult] = useState<any>(null);
   const [reportError, setReportError] = useState<string | null>(null);
 
+  // Backtest state
+  const [btStartDate, setBtStartDate]   = useState(() => { const d = new Date(); d.setMonth(d.getMonth()-1); return d.toISOString().split("T")[0]; });
+  const [btEndDate,   setBtEndDate]     = useState(() => new Date().toISOString().split("T")[0]);
+  const [btLoading,   setBtLoading]     = useState(false);
+  const [btResult,    setBtResult]      = useState<any>(null);
+  const [btError,     setBtError]       = useState<string | null>(null);
+  const [btTab,       setBtTab]         = useState<"summary"|"trades"|"daily">("summary");
+
+  const handleRunBacktest = async () => {
+    setBtError(null);
+    setBtResult(null);
+    setBtLoading(true);
+    try {
+      const res = await fetch(`/api/backtest?start=${btStartDate}&end=${btEndDate}`);
+      const data = await res.json();
+      if (!res.ok) { setBtError(data.detail || "Backtest failed"); }
+      else { setBtResult(data); }
+    } catch (e: any) {
+      setBtError(`Network error: ${e?.message}`);
+    } finally {
+      setBtLoading(false);
+    }
+  };
+
   const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "reports" | "broker" | "help">("cockpit");
 
   // ── DEMO ONLY: trades shown in the demo player (never confused with real DB trades)
@@ -857,116 +881,206 @@ export default function App() {
           )}
 
           {activeTab === "reports" && (
-            <div className="flex flex-col gap-6">
-              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5">
-                <div className="flex items-center justify-between gap-4 pb-3 border-b border-slate-800">
-                  <div>
-                    <h3 className="text-sm font-bold text-white">Historical Trade Report</h3>
-                    <p className="text-[11px] text-slate-400 mt-1">View real executed trades and P&L for any date.</p>
+            <div className="flex flex-col gap-6 p-4 overflow-y-auto h-full">
+
+              {/* ── HISTORICAL REPORT ── */}
+              <div className="bg-slate-900/60 border border-slate-700 rounded-xl p-5">
+                <h3 className="text-sm font-bold text-white uppercase tracking-wider font-mono mb-4 flex items-center gap-2">
+                  <span>📋</span> Historical Trade Report
+                  <span className="text-[10px] text-slate-500 font-normal normal-case ml-1">(live/paper trades your bot placed)</span>
+                </h3>
+                <div className="flex gap-3 items-end flex-wrap">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">Date</span>
+                    <input type="date" value={reportDate} onChange={e => setReportDate(e.target.value)}
+                      className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:border-indigo-500" />
                   </div>
                   <button onClick={handleRunReport}
-                    className={`px-4 py-2 rounded uppercase text-xs font-bold tracking-wider ${reportLoading ? "bg-slate-700 text-slate-200" : "bg-sky-500 text-slate-950 hover:bg-sky-400"}`}>
-                    {reportLoading ? "Loading…" : "Generate Report"}
+                    className={`px-4 py-2 rounded uppercase text-xs font-bold tracking-wider cursor-pointer ${reportLoading ? "bg-slate-700 text-slate-400" : "bg-sky-600 text-white hover:bg-sky-500"}`}>
+                    {reportLoading ? "Loading…" : "Generate"}
                   </button>
                 </div>
-
-                <div className="mt-5 flex gap-4 items-end">
-                  <div className="flex-1 space-y-2">
-                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold">Select Date</label>
-                    <input type="date" value={reportDate}
-                      onChange={e => setReportDate(e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-slate-100 text-sm font-mono" />
-                  </div>
-                </div>
-
-                {reportError && (
-                  <div className="mt-4 rounded-lg border border-rose-500/40 bg-rose-950/20 p-3 text-slate-200 text-sm">
-                    {reportError}
+                {reportError && <div className="mt-3 text-xs text-rose-400 font-mono bg-rose-900/20 border border-rose-700/30 rounded p-2">{reportError}</div>}
+                {reportResult && (
+                  <div className="mt-4">
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      {[
+                        { label: "Trades", value: reportResult.metrics.total_trades, color: "text-white" },
+                        { label: "Win Rate", value: `${reportResult.metrics.win_rate}%`, color: "text-emerald-400" },
+                        { label: "Net P&L", value: `₹${reportResult.metrics.net_pnl}`, color: reportResult.metrics.net_pnl >= 0 ? "text-emerald-400" : "text-rose-400" },
+                      ].map(m => (
+                        <div key={m.label} className="bg-slate-800 rounded-lg p-3 text-center border border-slate-700">
+                          <div className="text-[10px] text-slate-500 uppercase font-mono">{m.label}</div>
+                          <div className={`text-lg font-bold font-mono mt-1 ${m.color}`}>{m.value}</div>
+                        </div>
+                      ))}
+                    </div>
+                    {reportResult.metrics.total_trades === 0
+                      ? <div className="text-xs text-slate-500 text-center py-4">No trades placed by the bot on this date.</div>
+                      : reportResult.trades.map((t: any) => (
+                        <div key={t.id} className="bg-slate-800 border border-slate-700 rounded p-3 mb-2 text-xs font-mono">
+                          <div className="flex justify-between">
+                            <span className={`font-bold ${t.option_type === "CE" ? "text-sky-400" : "text-amber-400"}`}>{t.setup_name} — {t.option_type}</span>
+                            <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
+                          </div>
+                          <div className="text-slate-500 mt-1">Entry ₹{t.entry_price} → Exit ₹{t.exit_price} | {t.status}</div>
+                        </div>
+                      ))
+                    }
                   </div>
                 )}
               </div>
 
-              {reportResult && (
-                <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 space-y-5">
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-slate-500">Date</p>
-                      <p className="mt-2 font-bold text-white text-sm font-mono">{reportResult.date}</p>
-                    </div>
-                    <div className="bg-rose-950/20 border border-rose-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-rose-300">Total Trades</p>
-                      <p className="mt-2 text-2xl font-bold text-rose-300">{reportResult.metrics.total_trades}</p>
-                    </div>
-                    <div className="bg-sky-950/20 border border-sky-800 rounded-lg p-4">
-                      <p className="text-[10px] uppercase tracking-widest text-sky-300">Win Rate</p>
-                      <p className="mt-2 text-2xl font-bold text-sky-300">{reportResult.metrics.win_rate.toFixed(2)}%</p>
-                    </div>
-                    <div className={`${reportResult.metrics.net_pnl >= 0 ? "bg-emerald-950/20 border-emerald-800" : "bg-rose-950/20 border-rose-800"} border rounded-lg p-4`}>
-                      <p className={`text-[10px] uppercase tracking-widest ${reportResult.metrics.net_pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>Net P&L</p>
-                      <p className={`mt-2 text-2xl font-bold ${reportResult.metrics.net_pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>₹{reportResult.metrics.net_pnl.toFixed(2)}</p>
-                    </div>
-                  </div>
+              {/* ── BACKTEST ENGINE ── */}
+              <div className="bg-slate-900/60 border border-indigo-700/40 rounded-xl p-5">
+                <h3 className="text-sm font-bold text-indigo-300 uppercase tracking-wider font-mono mb-1 flex items-center gap-2">
+                  <span>🔬</span> Backtest Engine
+                  <span className="text-[10px] text-slate-500 font-normal normal-case ml-1">(simulate strategy on past NIFTY data)</span>
+                </h3>
+                <p className="text-[11px] text-slate-500 mb-4">Fetches real historical NIFTY 5m data from Upstox and replays all 4 setups. Requires Upstox to be connected.</p>
 
-                  <div className="bg-slate-950/60 border border-slate-800 rounded-lg p-4 text-sm space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Wins</span>
-                      <span className="text-white font-bold">{reportResult.metrics.wins}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Losses</span>
-                      <span className="text-white font-bold">{reportResult.metrics.losses}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Gross Profit</span>
-                      <span className="text-white font-bold">₹{reportResult.metrics.gross_profit.toFixed(2)}</span>
-                    </div>
-                    <div className="flex justify-between">
-                      <span className="text-slate-400">Gross Loss</span>
-                      <span className="text-white font-bold">₹{reportResult.metrics.gross_loss.toFixed(2)}</span>
-                    </div>
+                <div className="flex gap-3 items-end flex-wrap">
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">From</span>
+                    <input type="date" value={btStartDate} onChange={e => setBtStartDate(e.target.value)}
+                      className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:border-indigo-500" />
                   </div>
+                  <div className="flex flex-col gap-1">
+                    <span className="text-[10px] text-slate-500 font-mono uppercase">To</span>
+                    <input type="date" value={btEndDate} onChange={e => setBtEndDate(e.target.value)}
+                      className="bg-slate-800 border border-slate-700 rounded px-3 py-1.5 text-xs font-mono text-slate-200 outline-none focus:border-indigo-500" />
+                  </div>
+                  <button onClick={handleRunBacktest} disabled={btLoading}
+                    className={`px-5 py-2 rounded uppercase text-xs font-bold tracking-wider cursor-pointer border transition-all disabled:opacity-50 ${btLoading ? "bg-slate-700 text-slate-400 border-slate-600" : "bg-indigo-600 border-indigo-500 text-white hover:bg-indigo-500"}`}>
+                    {btLoading ? "⏳ Running…" : "▶ Run Backtest"}
+                  </button>
+                </div>
 
-                  {reportResult.trades.length > 0 && (
-                    <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-4">
-                      <h4 className="text-xs uppercase tracking-widest text-slate-400 mb-3 font-bold">Trades ({reportResult.trades.length})</h4>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-xs font-mono">
-                          <thead className="border-b border-slate-700">
-                            <tr className="text-slate-400">
-                              <th className="text-left p-2">Setup</th>
-                              <th className="text-left p-2">Type</th>
-                              <th className="text-right p-2">Entry</th>
-                              <th className="text-right p-2">Exit</th>
-                              <th className="text-right p-2">SL</th>
-                              <th className="text-right p-2">TP</th>
-                              <th className="text-right p-2">P&L</th>
-                              <th className="text-left p-2">Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {reportResult.trades.map((trade: any, idx: number) => (
-                              <tr key={idx} className="border-b border-slate-800/40 hover:bg-slate-950/40">
-                                <td className="p-2 text-slate-300">{trade.setup_name}</td>
-                                <td className="p-2"><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${trade.trade_type === "BUY" ? "bg-emerald-500/20 text-emerald-300" : "bg-rose-500/20 text-rose-300"}`}>{trade.trade_type}</span></td>
-                                <td className="text-right p-2 text-slate-300">₹{trade.entry_price.toFixed(2)}</td>
-                                <td className="text-right p-2 text-slate-300">{trade.exit_price ? `₹${trade.exit_price.toFixed(2)}` : "—"}</td>
-                                <td className="text-right p-2 text-slate-400">₹{trade.stop_loss.toFixed(2)}</td>
-                                <td className="text-right p-2 text-slate-400">₹{trade.take_profit.toFixed(2)}</td>
-                                <td className={`text-right p-2 font-bold ${trade.pnl >= 0 ? "text-emerald-300" : "text-rose-300"}`}>{trade.pnl >= 0 ? "+" : ""}₹{trade.pnl.toFixed(2)}</td>
-                                <td className="p-2"><span className="text-[10px] text-slate-400">{trade.status}</span></td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
+                {btLoading && (
+                  <div className="mt-4 text-xs text-indigo-400 font-mono animate-pulse">
+                    Fetching historical candles and replaying strategy… this may take 30–60 seconds for longer date ranges.
+                  </div>
+                )}
+
+                {btError && <div className="mt-3 text-xs text-rose-400 font-mono bg-rose-900/20 border border-rose-700/30 rounded p-2">{btError}</div>}
+
+                {btResult && (
+                  <div className="mt-5">
+
+                    {/* Top metrics */}
+                    <div className="grid grid-cols-2 gap-3 mb-4 sm:grid-cols-4">
+                      {[
+                        { label: "Total Trades", value: btResult.metrics.total_trades, color: "text-white" },
+                        { label: "Win Rate",     value: `${btResult.metrics.win_rate}%`, color: "text-emerald-400" },
+                        { label: "Net P&L",      value: `₹${btResult.metrics.net_pnl}`, color: btResult.metrics.net_pnl >= 0 ? "text-emerald-400" : "text-rose-400" },
+                        { label: "Avg/Trade",    value: `₹${btResult.metrics.avg_pnl_per_trade}`, color: btResult.metrics.avg_pnl_per_trade >= 0 ? "text-emerald-400" : "text-rose-400" },
+                      ].map(m => (
+                        <div key={m.label} className="bg-slate-800 rounded-lg p-3 text-center border border-slate-700">
+                          <div className="text-[10px] text-slate-500 uppercase font-mono">{m.label}</div>
+                          <div className={`text-xl font-bold font-mono mt-1 ${m.color}`}>{m.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-3 mb-4">
+                      {[
+                        { label: "TP Hits",   value: btResult.metrics.wins,      color: "text-emerald-400" },
+                        { label: "SL Hits",   value: btResult.metrics.losses,    color: "text-rose-400" },
+                        { label: "EOD Exits", value: btResult.metrics.eod_exits, color: "text-amber-400" },
+                      ].map(m => (
+                        <div key={m.label} className="bg-slate-800 rounded-lg p-3 text-center border border-slate-700">
+                          <div className="text-[10px] text-slate-500 uppercase font-mono">{m.label}</div>
+                          <div className={`text-xl font-bold font-mono mt-1 ${m.color}`}>{m.value}</div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Per-setup breakdown */}
+                    <div className="mb-4">
+                      <div className="text-[11px] text-slate-400 font-mono uppercase font-bold mb-2">Setup Breakdown</div>
+                      <div className="grid grid-cols-2 gap-2">
+                        {Object.entries(btResult.setup_breakdown).map(([name, s]: [string, any]) => (
+                          <div key={name} className={`bg-slate-800 border rounded-lg p-3 ${s.net_pnl >= 0 ? "border-emerald-800/50" : "border-rose-800/50"}`}>
+                            <div className="flex justify-between items-center">
+                              <span className="text-xs font-bold font-mono text-slate-200">{name}</span>
+                              <span className={`text-xs font-bold font-mono ${s.net_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>₹{s.net_pnl}</span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono mt-1">
+                              {s.trades} trades · {s.win_rate}% WR · {s.wins}W {s.losses}L
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
-                  )}
 
-                  {reportResult.trades.length === 0 && (
-                    <div className="rounded-lg border border-slate-800 p-4 text-slate-400 text-sm text-center">No trades found for {reportResult.date}.</div>
-                  )}
-                </div>
-              )}
+                    {/* Sub-tabs: Summary / Trades / Daily */}
+                    <div className="flex gap-2 mb-3">
+                      {(["summary","trades","daily"] as const).map(t => (
+                        <button key={t} onClick={() => setBtTab(t)}
+                          className={`px-3 py-1 rounded text-[10px] font-bold font-mono uppercase cursor-pointer border transition-all ${btTab === t ? "bg-indigo-600 border-indigo-500 text-white" : "bg-slate-800 border-slate-700 text-slate-400 hover:text-white"}`}>
+                          {t === "summary" ? "📊 Summary" : t === "trades" ? "📋 All Trades" : "📅 By Day"}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Summary tab */}
+                    {btTab === "summary" && (
+                      <div className="text-xs font-mono text-slate-400 bg-slate-800 rounded-lg p-4 space-y-1 border border-slate-700">
+                        <div>Period: <span className="text-white">{btResult.start_date} → {btResult.end_date}</span></div>
+                        <div>Days processed: <span className="text-white">{btResult.days_processed}</span></div>
+                        {btResult.days_skipped.length > 0 && <div>Days skipped (no data): <span className="text-amber-400">{btResult.days_skipped.join(", ")}</span></div>}
+                        <div>Gross Profit: <span className="text-emerald-400">₹{btResult.metrics.gross_profit}</span></div>
+                        <div>Gross Loss: <span className="text-rose-400">₹{btResult.metrics.gross_loss}</span></div>
+                        <div>Net P&L: <span className={btResult.metrics.net_pnl >= 0 ? "text-emerald-400 font-bold" : "text-rose-400 font-bold"}>₹{btResult.metrics.net_pnl}</span></div>
+                      </div>
+                    )}
+
+                    {/* All trades tab */}
+                    {btTab === "trades" && (
+                      <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+                        {btResult.trades.length === 0
+                          ? <div className="text-xs text-slate-500 text-center py-6">No trades triggered in this period.</div>
+                          : btResult.trades.map((t: any, i: number) => (
+                            <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-[11px] font-mono">
+                              <div className="flex justify-between items-center">
+                                <span className="text-slate-300 font-bold">{t.date} — {t.setup_name}</span>
+                                <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
+                              </div>
+                              <div className="text-slate-500 mt-0.5">
+                                {t.option_type} · Entry ₹{t.entry_price} · Exit ₹{t.exit_price} · SL ₹{t.stop_loss} · TP ₹{t.take_profit}
+                              </div>
+                              <div className="flex justify-between mt-0.5">
+                                <span className="text-slate-600">{t.entry_time?.slice(11,16)} → {t.exit_time?.slice(11,16)}</span>
+                                <span className={`font-bold text-[10px] ${t.status === "CLOSED_TP" ? "text-emerald-400" : t.status === "CLOSED_SL" ? "text-rose-400" : "text-amber-400"}`}>{t.status}</span>
+                              </div>
+                            </div>
+                          ))
+                        }
+                      </div>
+                    )}
+
+                    {/* Daily tab */}
+                    {btTab === "daily" && (
+                      <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
+                        {btResult.day_summaries.filter((d: any) => d.trades > 0).length === 0
+                          ? <div className="text-xs text-slate-500 text-center py-6">No trading days with triggered setups.</div>
+                          : btResult.day_summaries.filter((d: any) => d.trades > 0).map((d: any, i: number) => (
+                            <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-[11px] font-mono flex justify-between items-center">
+                              <div>
+                                <span className="text-slate-200 font-bold">{d.date}</span>
+                                <span className="text-slate-500 ml-2">{d.trades} trade{d.trades > 1 ? "s" : ""} · {d.wins}W {d.losses}L</span>
+                              </div>
+                              <span className={`font-bold ${d.net_pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{d.net_pnl >= 0 ? "+" : ""}₹{d.net_pnl}</span>
+                            </div>
+                          ))
+                        }
+                      </div>
+                    )}
+
+                  </div>
+                )}
+              </div>
+
             </div>
           )}
 

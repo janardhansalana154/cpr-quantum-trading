@@ -16,6 +16,7 @@ from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupSt
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
 
 from reports.historical_report import generate_historical_report
+from reports.backtest_engine import run_backtest
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 
@@ -642,6 +643,37 @@ def historical_report(date: Optional[date] = Query(None, description="Target dat
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return report
+
+
+# ------------------------------------------------------------------
+# Backtest endpoint
+# ------------------------------------------------------------------
+@app.get("/api/backtest")
+def run_backtest_endpoint(
+    start: str = Query(..., description="Start date YYYY-MM-DD"),
+    end:   str = Query(..., description="End date YYYY-MM-DD"),
+    db: Session = Depends(get_db)
+):
+    """
+    Run a historical backtest of all 4 CPR setups over a date range.
+    Fetches real NIFTY 5m data from Upstox for each trading day.
+    Requires a valid Upstox token to fetch historical candles.
+    """
+    try:
+        start_date = date.fromisoformat(start)
+        end_date   = date.fromisoformat(end)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end date must be >= start date")
+
+    delta = (end_date - start_date).days
+    if delta > 90:
+        raise HTTPException(status_code=400, detail="Date range cannot exceed 90 days")
+
+    result = run_backtest(start_date, end_date, upstox)
+    return result
 
 
 # ------------------------------------------------------------------
