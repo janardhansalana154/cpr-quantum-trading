@@ -187,7 +187,7 @@ def check_active_position_targets():
         # ── CHANGE 1: Live daily loss-limit squareoff ──
         rm_check = RiskManager(db)
         day_state = rm_check.get_or_create_daily_state()
-        qty = open_trade.lots * 75
+        qty = open_trade.lots * settings.NIFTY_LOT_SIZE
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:  # Long / CE
             unrealised = (ltp - open_trade.entry_price) * qty
         else:                                                   # Short / PE

@@ -123,7 +123,7 @@ class RiskManager:
             
         state = self.get_or_create_daily_state()
         
-        qty = trade.lots * 75  # Nifty option lot size is 75
+        qty = trade.lots * settings.NIFTY_LOT_SIZE
         pnl = 0.0
         
         # In Indian option trading: Options are ALWAYS BOUGHT to execute strategy directives.

@@ -3,7 +3,7 @@ Backtest Engine — runs all 4 CPR setups against historical Upstox data.
 
 P&L MODEL:
   - SL and TP are NIFTY INDEX price levels (same as live bot)
-  - P&L = index_points_moved × lots × LOT_SIZE (75)
+  - P&L = index_points_moved × lots × LOT_SIZE (from settings, currently 65)
   - A single trade loss is HARD CAPPED at DAILY_LOSS_LIMIT
   - If a trade's SL loss would exceed the daily limit, the trade exits
     at the exact price that hits the daily limit instead
@@ -20,7 +20,7 @@ from strategies.cpr_strategy import SetupStateMachine, calculate_cpr_levels
 
 logger = logging.getLogger("CPR_System.Backtest")
 
-LOT_SIZE = 75   # NIFTY options lot size
+LOT_SIZE = settings.NIFTY_LOT_SIZE
 
 
 def _trading_days(start: date, end: date) -> List[date]:

@@ -698,7 +698,7 @@ class UpstoxClient:
         return f"NIFTY{expiry}{int(strike)}{opt_type}", float(strike), opt_type
 
     def place_order(self, option_symbol: str, action: Literal["BUY", "SELL"], lots: int, paper: bool = True) -> Dict:
-        qty = lots * 75
+        qty = lots * settings.NIFTY_LOT_SIZE
         if paper:
             logger.info(f"[PAPER ORDER] {action} {qty} units of {option_symbol}")
             return {

@@ -36,7 +36,8 @@ class Settings(BaseSettings):
     SQUAREOFF_HOUR: int        = Field(default=15, description="Force square-off all positions at this IST hour (15 = 3 PM)")
     SQUAREOFF_MIN:  int        = Field(default=0,  description="Force square-off at this IST minute")
     MAX_DAILY_TRADES: int = Field(default=2, description="Maximum number of trade executions allowed per day")
-    POSITION_LOTS: int = Field(default=1, description="Number of lots to trade per order")
+    POSITION_LOTS: int   = Field(default=1,  description="Number of lots to trade per order")
+    NIFTY_LOT_SIZE: int  = Field(default=65, description="NIFTY options lot size (NSE defined)")
     
     class Config:
         env_file = ".env"
@@ -97,7 +98,8 @@ except Exception as e:
         SQUAREOFF_HOUR          = int(os.environ.get("SQUAREOFF_HOUR", 15))
         SQUAREOFF_MIN           = int(os.environ.get("SQUAREOFF_MIN", 0))
         MAX_DAILY_TRADES = int(os.environ.get("MAX_DAILY_TRADES", 2))
-        POSITION_LOTS = int(os.environ.get("POSITION_LOTS", 1))
+        POSITION_LOTS   = int(os.environ.get("POSITION_LOTS", 1))
+        NIFTY_LOT_SIZE  = int(os.environ.get("NIFTY_LOT_SIZE", 65))
     settings = FallbackSettings()
 
 # Configure logging
