@@ -442,38 +442,70 @@ class UpstoxClient:
         return five_min
 
     def _fetch_intraday_1m_for_date(self, trading_date: date, token: str) -> List[Dict]:
-        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
-        url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        params = {
-            "from": trading_date.strftime("%Y-%m-%d 09:15:00"),
-            "to": trading_date.strftime("%Y-%m-%d 15:30:00"),
-        }
+        """
+        Fetch 1-minute NIFTY candles for a specific date.
 
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=10)
-            if resp.status_code == 200:
-                raw = resp.json().get("data", {}).get("candles", [])
-                if not raw:
-                    logger.warning(f"[HISTORICAL] No 1m candles returned for {trading_date}.")
-                    return []
-                one_min = [
-                    {"time": c[0], "open": float(c[1]), "high": float(c[2]),
-                     "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
-                    for c in raw
-                ]
-                one_min.reverse()
-                return one_min
-            elif resp.status_code == 401:
-                logger.error("[TOKEN] Historical candle fetch rejected (401). Clearing cache.")
-                self._clear_token()
-                self._invalidate_db_token()
+        Upstox has TWO different endpoints:
+          - /intraday/{key}/1minute          → today only, no date params
+          - /historical-candle/{key}/1minute/{to}/{from}  → past dates
+
+        For backtest we always use the historical endpoint, even for today,
+        since intraday endpoint ignores date params entirely.
+
+        Upstox historical endpoint date format: YYYY-MM-DD (date only, no time)
+        Returns candles newest-first → we reverse to chronological.
+        """
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        today = datetime.now(_IST).date()
+
+        if trading_date >= today:
+            # Use intraday endpoint for today
+            url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+            except Exception as e:
+                logger.error(f"[HISTORICAL] Network error (intraday) for {trading_date}: {e}")
                 return []
-            else:
-                logger.error(f"[HISTORICAL] Candle fetch failed (HTTP {resp.status_code}): {resp.text}")
+        else:
+            # Use historical endpoint for past dates
+            # Format: /historical-candle/{key}/1minute/{to_date}/{from_date}
+            # Both dates must be the same trading day for intraday data
+            date_str = trading_date.strftime("%Y-%m-%d")
+            url = f"{self.base_url}/historical-candle/{instrument_key}/1minute/{date_str}/{date_str}"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            logger.info(f"[HISTORICAL] Fetching 1m candles for {trading_date} via: {url}")
+            try:
+                resp = requests.get(url, headers=headers, timeout=15)
+            except Exception as e:
+                logger.error(f"[HISTORICAL] Network error (historical) for {trading_date}: {e}")
                 return []
-        except Exception as e:
-            logger.error(f"[HISTORICAL] Network error fetching candles for {trading_date}: {e}")
+
+        if resp.status_code == 200:
+            raw = resp.json().get("data", {}).get("candles", [])
+            if not raw:
+                logger.warning(f"[HISTORICAL] No 1m candles returned for {trading_date}.")
+                return []
+            one_min = [
+                {"time": c[0], "open": float(c[1]), "high": float(c[2]),
+                 "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
+                for c in raw
+            ]
+            one_min.reverse()   # Upstox returns newest-first → make chronological
+            logger.info(f"[HISTORICAL] Got {len(one_min)} 1m candles for {trading_date}")
+            return one_min
+        elif resp.status_code == 401:
+            logger.error("[TOKEN] Historical candle fetch rejected (401). Clearing cache.")
+            self._clear_token()
+            self._invalidate_db_token()
+            return []
+        elif resp.status_code == 429:
+            import time
+            logger.warning(f"[HISTORICAL] Rate limited (429) for {trading_date}. Sleeping 2s.")
+            time.sleep(2)
+            return []
+        else:
+            logger.error(f"[HISTORICAL] Candle fetch failed (HTTP {resp.status_code}) for {trading_date}: {resp.text[:200]}")
             return []
 
     def get_nifty_historical_5m_for_day(self, trading_date: date) -> List[Dict]:

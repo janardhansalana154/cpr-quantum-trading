@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from typing import List, Dict, Optional, Any
 import logging
 
+import time
 from config.settings import settings
 from strategies.cpr_strategy import SetupStateMachine, calculate_cpr_levels
 
@@ -113,6 +114,7 @@ def run_backtest(
 
     for trading_date in days:
         logger.info(f"[BACKTEST] Processing {trading_date} ...")
+        time.sleep(0.3)   # small delay to avoid Upstox rate limiting across days
 
         # 1. Fetch previous day OHLC for CPR calculation
         prev_ohlc = upstox_client.get_previous_day_ohlc_for_date(trading_date)
