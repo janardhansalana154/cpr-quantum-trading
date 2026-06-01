@@ -8,6 +8,10 @@ env/
 venv/
 ENV/
 
+# Local runtime files
+cpr_trading.db
+cpr_trading_system.log
+
 # Node
 node_modules/
 /dist
