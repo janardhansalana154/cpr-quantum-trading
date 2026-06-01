@@ -1,6 +1,6 @@
 import os
 import logging
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -108,8 +108,34 @@ def startup_event():
         max_instances=1,
         coalesce=True,
     )
+    scheduler.add_job(
+        keep_upstox_alive,
+        "interval",
+        minutes=10,
+        id="upstox_keepalive_job",
+        max_instances=1,
+        coalesce=True,
+    )
     scheduler.start()
-    logger.info("[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP checker.")
+    logger.info("[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP checker + 10m Upstox keepalive.")
+
+
+# ------------------------------------------------------------------
+# Upstox keepalive (runs every 10 minutes)
+# ------------------------------------------------------------------
+def keep_upstox_alive():
+    if upstox is None:
+        return
+
+    if not upstox.ensure_authenticated():
+        logger.info("[UPSTOX] Keepalive skipped — no valid token available.")
+        return
+
+    ltp = upstox.get_nifty_price()
+    if ltp is not None:
+        logger.debug(f"[UPSTOX] Keepalive success — Nifty LTP {ltp}.")
+    else:
+        logger.debug("[UPSTOX] Keepalive probe complete — token still valid.")
 
 
 # ------------------------------------------------------------------
@@ -371,6 +397,132 @@ def get_system_status(db: Session = Depends(get_db)):
             "loss_limit": settings.DAILY_LOSS_LIMIT,
             "lots": settings.POSITION_LOTS,
         },
+    }
+
+
+def _simulate_backtest_day(candles: List[Dict[str, Any]], levels: CPRLevels) -> List[Dict[str, Any]]:
+    setups = {
+        name: SetupStateMachine(name)
+        for name in ["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"]
+    }
+
+    trades: List[Dict[str, Any]] = []
+    open_trade: Optional[Dict[str, Any]] = None
+    qty = settings.POSITION_LOTS * 75
+
+    def _exit_trade(trade: Dict[str, Any], candle: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        if trade["trade_type"] == "BUY":
+            if candle["low"] <= trade["stop_loss"]:
+                return {"exit_price": trade["stop_loss"], "status": "CLOSED_SL"}
+            if candle["high"] >= trade["take_profit"]:
+                return {"exit_price": trade["take_profit"], "status": "CLOSED_TP"}
+        else:
+            if candle["high"] >= trade["stop_loss"]:
+                return {"exit_price": trade["stop_loss"], "status": "CLOSED_SL"}
+            if candle["low"] <= trade["take_profit"]:
+                return {"exit_price": trade["take_profit"], "status": "CLOSED_TP"}
+        return None
+
+    for idx, candle in enumerate(candles):
+        if open_trade is not None:
+            exit_info = _exit_trade(open_trade, candle)
+            if exit_info is not None:
+                open_trade["exit_price"] = exit_info["exit_price"]
+                open_trade["exit_time"] = candle["time"]
+                open_trade["status"] = exit_info["status"]
+                open_trade["pnl"] = round((open_trade["exit_price"] - open_trade["entry_price"]) * qty, 2)
+                trades.append(open_trade)
+                open_trade = None
+
+        if open_trade is None:
+            for name, machine in setups.items():
+                triggered, details = machine.update(candle, idx, levels)
+                if triggered and details is not None:
+                    open_trade = {
+                        "setup_name": details["setup_name"],
+                        "trade_type": details["trade_type"],
+                        "entry_price": details["trigger_price"],
+                        "entry_time": candle["time"],
+                        "stop_loss": details["stop_loss"],
+                        "take_profit": details["take_profit"],
+                        "status": "OPEN",
+                        "exit_price": None,
+                        "exit_time": None,
+                        "pnl": 0.0,
+                    }
+                    break
+
+    if open_trade is not None:
+        last_candle = candles[-1]
+        open_trade["exit_price"] = last_candle["close"]
+        open_trade["exit_time"] = last_candle["time"]
+        open_trade["status"] = "CLOSED_EOD"
+        open_trade["pnl"] = round((open_trade["exit_price"] - open_trade["entry_price"]) * qty, 2)
+        trades.append(open_trade)
+
+    return trades
+
+
+@app.get("/api/backtest")
+def backtest_strategy(
+    start_date: date = Query(..., description="First inclusive date in YYYY-MM-DD format"),
+    end_date: date = Query(..., description="Last inclusive date in YYYY-MM-DD format"),
+    db: Session = Depends(get_db),
+):
+    if upstox is None:
+        raise HTTPException(status_code=503, detail="Server still initialising")
+    if not upstox._is_authenticated():
+        raise HTTPException(status_code=400, detail="Upstox authentication required for historical data")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="end_date must be on or after start_date")
+    if (end_date - start_date).days > 30:
+        raise HTTPException(status_code=400, detail="Please request at most 30 days of historical data at once")
+
+    requested_days = []
+    current = start_date
+    while current <= end_date:
+        requested_days.append(current)
+        current += timedelta(days=1)
+
+    trades: List[Dict[str, Any]] = []
+    total_candles = 0
+    covered_days = 0
+
+    for trading_day in requested_days:
+        prev_ohlc = upstox.get_previous_day_ohlc_for_date(trading_day)
+        if prev_ohlc is None:
+            continue
+        levels = calculate_cpr_levels(prev_ohlc["high"], prev_ohlc["low"], prev_ohlc["close"])
+        day_candles = upstox.get_nifty_historical_5m_for_day(trading_day)
+        if not day_candles:
+            continue
+        covered_days += 1
+        total_candles += len(day_candles)
+        day_trades = _simulate_backtest_day(day_candles, levels)
+        trades.extend(day_trades)
+
+    wins = len([t for t in trades if t["pnl"] > 0])
+    losses = len([t for t in trades if t["pnl"] < 0])
+    gross_profit = sum(t["pnl"] for t in trades if t["pnl"] > 0)
+    gross_loss = sum(t["pnl"] for t in trades if t["pnl"] < 0)
+    net_pnl = sum(t["pnl"] for t in trades)
+
+    return {
+        "period": {"start_date": start_date.isoformat(), "end_date": end_date.isoformat()},
+        "days_requested": len(requested_days),
+        "days_covered": covered_days,
+        "candles_count": total_candles,
+        "source": "UPSTOX_HISTORICAL",
+        "metrics": {
+            "total_trades": len(trades),
+            "win_rate": round((wins / len(trades)) * 100, 2) if trades else 0.0,
+            "wins": wins,
+            "losses": losses,
+            "gross_profit": round(gross_profit, 2),
+            "gross_loss": round(gross_loss, 2),
+            "net_pnl": round(net_pnl, 2),
+        },
+        "trades": trades,
     }
 
 

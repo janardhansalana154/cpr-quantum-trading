@@ -211,6 +211,8 @@ class UpstoxClient:
                 status = "Active"
                 expiry_desc = f"Active — expires {expiry_ist.strftime('%H:%M IST')} ({h}h {m}m left)"
                 connected = True
+                base["data_source"] = "UPSTOX LIVE"
+                base["websocket_status"] = "Connected"
 
             preview = tok.access_token[:8] + "..." + tok.access_token[-8:] if len(tok.access_token) > 16 else "Valid"
             return {
@@ -229,6 +231,18 @@ class UpstoxClient:
                     "token_preview": "Error", **base}
         finally:
             db.close()
+
+    def ensure_authenticated(self) -> bool:
+        """Load a valid token from DB and mark Upstox as live if available."""
+        token = self.get_token()
+        if token is None:
+            self.data_source = "DISCONNECTED"
+            self.websocket_status = "Disconnected"
+            return False
+
+        self.data_source = "UPSTOX LIVE"
+        self.websocket_status = "Connected"
+        return True
 
     # ------------------------------------------------------------------
     # OAuth
@@ -268,9 +282,11 @@ class UpstoxClient:
                     try:
                         db.query(UpstoxToken).delete()
                         now = datetime.utcnow()
+                        expiry_at = _token_expires_at_midnight_ist(now)
                         db.add(UpstoxToken(
                             access_token=token,
                             status="Connected",
+                            expiry_time=expiry_at,
                             last_authenticated_at=now,
                         ))
                         db.commit()
@@ -402,6 +418,99 @@ class UpstoxClient:
                 "volume": sum(b["volume"] for b in bars),
             })
         return five_min
+
+    def _fetch_intraday_1m_for_date(self, trading_date: date, token: str) -> List[Dict]:
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        params = {
+            "from": trading_date.strftime("%Y-%m-%d 09:15:00"),
+            "to": trading_date.strftime("%Y-%m-%d 15:30:00"),
+        }
+
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                if not raw:
+                    logger.warning(f"[HISTORICAL] No 1m candles returned for {trading_date}.")
+                    return []
+                one_min = [
+                    {"time": c[0], "open": float(c[1]), "high": float(c[2]),
+                     "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
+                    for c in raw
+                ]
+                one_min.reverse()
+                return one_min
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Historical candle fetch rejected (401). Clearing cache.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return []
+            else:
+                logger.error(f"[HISTORICAL] Candle fetch failed (HTTP {resp.status_code}): {resp.text}")
+                return []
+        except Exception as e:
+            logger.error(f"[HISTORICAL] Network error fetching candles for {trading_date}: {e}")
+            return []
+
+    def get_nifty_historical_5m_for_day(self, trading_date: date) -> List[Dict]:
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — historical 5m candles skipped.")
+            return []
+
+        token = self.get_token()
+        if token is None:
+            return []
+
+        one_min = self._fetch_intraday_1m_for_date(trading_date, token)
+        return self._aggregate_to_5min(one_min)
+
+    def get_previous_day_ohlc_for_date(self, target_date: date) -> Optional[Dict]:
+        if not self._is_authenticated():
+            logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
+            return None
+
+        token = self.get_token()
+        if token is None:
+            return None
+
+        from_d = (target_date - timedelta(days=7)).strftime("%Y-%m-%d")
+        to_d = target_date.strftime("%Y-%m-%d")
+        instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
+        url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_d}/{from_d}"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+        try:
+            resp = requests.get(url, headers=headers, timeout=10)
+            if resp.status_code == 200:
+                raw = resp.json().get("data", {}).get("candles", [])
+                previous = None
+                for candle in raw:
+                    if not isinstance(candle, list) or len(candle) < 5:
+                        continue
+                    candle_date = str(candle[0])[:10]
+                    if candle_date >= target_date.strftime("%Y-%m-%d"):
+                        continue
+                    previous = candle
+                    break
+                if previous:
+                    h, l, c = float(previous[2]), float(previous[3]), float(previous[4])
+                    logger.info(f"[HISTORICAL] Prev day OHLC for {target_date}: H={h} L={l} C={c}")
+                    return {"high": h, "low": l, "close": c}
+                logger.warning(f"[HISTORICAL] No prior trading day OHLC returned for {target_date}.")
+                return None
+            elif resp.status_code == 401:
+                logger.error("[TOKEN] Prev OHLC call rejected (401). Clearing token.")
+                self._clear_token()
+                self._invalidate_db_token()
+                return None
+            else:
+                logger.error(f"[HISTORICAL] Prev OHLC failed (HTTP {resp.status_code}): {resp.text}")
+                return None
+        except Exception as e:
+            logger.error(f"[HISTORICAL] Error fetching prev OHLC for {target_date}: {e}")
+            return None
 
     def get_nifty_price(self) -> Optional[float]:
         """
