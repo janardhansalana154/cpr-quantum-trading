@@ -149,6 +149,8 @@ export default function App() {
     env_redirect_uri: "",
     is_localhost_fallback: false,
   });
+  const authPopupRef = useRef<Window | null>(null);
+  const authStatusPollRef = useRef<number | null>(null);
 
   // ── RULE 1/4/5: Live status from backend — all fields initialized to DISCONNECTED/CLOSED
   const [liveStatus, setLiveStatus] = useState<LiveSystemStatus>({
@@ -319,12 +321,54 @@ export default function App() {
         if (data.upstox_api_key && data.upstox_api_key !== "mock_api_key") {
           setInputApiKey(prev => prev || data.upstox_api_key);
         }
-      } else {
-        setUpstoxStatus(prev => ({ ...prev, loading: false }));
+        return data;
       }
     } catch {
-      setUpstoxStatus(prev => ({ ...prev, loading: false }));
+      // ignore network failures, keep previous state
     }
+    setUpstoxStatus(prev => ({ ...prev, loading: false }));
+    return null;
+  };
+
+  const stopAuthPopupMonitor = () => {
+    if (authStatusPollRef.current !== null) {
+      window.clearInterval(authStatusPollRef.current);
+      authStatusPollRef.current = null;
+    }
+  };
+
+  const startAuthPopupMonitor = () => {
+    if (authStatusPollRef.current !== null) return;
+    authStatusPollRef.current = window.setInterval(async () => {
+      try {
+        const response = await fetch("/api/v1/upstox-status");
+        if (!response.ok) return;
+        const data = await response.json();
+        setUpstoxStatus({
+          connected: data.connected,
+          token_status: data.token_status,
+          expiry_status: data.expiry_status,
+          last_authenticated: data.last_authenticated,
+          token_preview: data.token_preview,
+          loading: false,
+          calculated_redirect_uri: data.calculated_redirect_uri || "",
+          upstox_api_key: data.upstox_api_key || "",
+          env_redirect_uri: data.env_redirect_uri || "",
+          is_localhost_fallback: !!data.is_localhost_fallback,
+        });
+        if (data.connected) {
+          addLog("SUCCESS", "⚡ UPSTOX CONNECTED: detected on server.");
+          stopAuthPopupMonitor();
+          authPopupRef.current = null;
+        } else if (authPopupRef.current?.closed) {
+          addLog("WARNING", "Upstox login window was closed before connection finished.");
+          stopAuthPopupMonitor();
+          authPopupRef.current = null;
+        }
+      } catch {
+        // network error during polling; keep polling
+      }
+    }, 3000);
   };
 
   const handleConnectUpstox = async () => {
@@ -375,8 +419,14 @@ export default function App() {
       const top = window.screen.height / 2 - height / 2;
       const w = window.open(url, "upstox_oauth_popup",
         `width=${width},height=${height},top=${top},left=${left},scrollbars=yes`);
+      authPopupRef.current = w || null;
+      startAuthPopupMonitor();
       if (!w || w.closed) window.open(url, "_blank");
-    } catch { window.open(url, "_blank"); }
+    } catch {
+      authPopupRef.current = null;
+      startAuthPopupMonitor();
+      window.open(url, "_blank");
+    }
   };
 
   useEffect(() => {
@@ -495,17 +545,33 @@ export default function App() {
     }
 
     const handleMsg = (event: MessageEvent) => {
-      const origin = event.origin;
-      if (!origin.endsWith(".run.app") && !origin.includes("localhost") && !origin.includes("127.0.0.1")) return;
+      if (event.origin !== window.location.origin) return;
       if (event.data?.type === "OAUTH_AUTH_SUCCESS") {
         addLog("SUCCESS", "⚡ UPSTOX CONNECTED: OAuth popup completed successfully!");
+        stopAuthPopupMonitor();
+        authPopupRef.current = null;
         fetchUpstoxStatus();
         fetchLiveStatus();
         fetchLiveTrades();
       }
     };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        fetchUpstoxStatus();
+        fetchLiveStatus();
+      }
+    };
+
     window.addEventListener("message", handleMsg);
-    return () => { window.removeEventListener("message", handleMsg); clearInterval(liveTimer); clearInterval(tradesTimer); };
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      window.removeEventListener("message", handleMsg);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+      clearInterval(liveTimer);
+      clearInterval(tradesTimer);
+      stopAuthPopupMonitor();
+    };
   }, []);
 
   const handleRunReport = async () => {

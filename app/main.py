@@ -588,7 +588,9 @@ def upstox_callback(request: Request, code: str, db: Session = Depends(get_db)):
     if upstox is None:
         raise HTTPException(status_code=503, detail="Server still initialising")
     success = upstox.authenticate(code, redirect_uri=_resolve_redirect_uri(request))
-    return _oauth_success_response() if success else HTTPException(400, "Authentication failed")
+    if success:
+        return _oauth_success_response()
+    raise HTTPException(status_code=400, detail="Authentication failed")
 
 
 @app.post("/api/config")
