@@ -1,8 +1,8 @@
 import os
 import logging
 from datetime import datetime, date, timezone, timedelta
-_IST = timezone(timedelta(hours=5, minutes=30)), timedelta
 from typing import Optional, List, Dict, Any
+
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -21,6 +21,8 @@ from reports.backtest_engine import run_backtest
 from fastapi.responses import HTMLResponse
 from fastapi import Request
 
+_IST = timezone(timedelta(hours=5, minutes=30))
+
 logger = logging.getLogger("CPR_System.Main")
 
 app = FastAPI(
@@ -36,8 +38,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# FIX: Create UpstoxClient AFTER init_db() runs (done in startup_event).
-# The module-level reference is declared here but populated in startup_event.
 upstox: Optional[UpstoxClient] = None
 
 setups = {
@@ -52,16 +52,11 @@ _cpr_date: Optional[str] = None
 
 
 def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
-    """
-    Returns CPR levels computed from previous-day OHLC via Upstox.
-    RULE 3: Returns None if Upstox is not authenticated — no hardcoded fallback.
-    Caches until end of day (recomputes each new calendar day).
-    """
     global _today_cpr_levels, _cpr_date
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     if _today_cpr_levels is not None and _cpr_date == today_str:
-        return _today_cpr_levels  # valid cache
+        return _today_cpr_levels
 
     prev = upstox.get_previous_day_ohlc() if upstox else None
     if prev:
@@ -74,11 +69,8 @@ def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
         )
     else:
         _today_cpr_levels = None
-        _cpr_date = today_str   # don't hammer the API every tick
-        logger.warning(
-            "[DATA_SOURCE=DISCONNECTED] CPR levels unavailable — "
-            "authenticate Upstox to enable live CPR."
-        )
+        _cpr_date = today_str
+        logger.warning("[DATA_SOURCE=DISCONNECTED] CPR levels unavailable — authenticate Upstox.")
     return _today_cpr_levels
 
 
@@ -86,14 +78,14 @@ def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
 def startup_event():
     global upstox
 
-    # FIX: Init DB FIRST so UpstoxClient can load persisted token from DB on startup
+    # Init DB FIRST so UpstoxClient can load token from DB on startup
     init_db()
-
-    # NOW create UpstoxClient — DB is ready so token reload works
     upstox = UpstoxClient()
     logger.info("[STARTUP] Database initialised. UpstoxClient created.")
 
     scheduler = BackgroundScheduler()
+
+    # Strategy tick — every 5 minutes
     scheduler.add_job(
         monitor_interval_tick,
         "cron",
@@ -103,6 +95,8 @@ def startup_event():
         max_instances=1,
         coalesce=True,
     )
+
+    # SL/TP monitor — every 30 seconds
     scheduler.add_job(
         check_active_position_targets,
         "interval",
@@ -111,6 +105,8 @@ def startup_event():
         max_instances=1,
         coalesce=True,
     )
+
+    # Upstox keepalive — every 10 minutes
     scheduler.add_job(
         keep_upstox_alive,
         "interval",
@@ -119,21 +115,66 @@ def startup_event():
         max_instances=1,
         coalesce=True,
     )
+
+    # FIX: Daily auto-reconnect at 8:55 AM IST
+    # Clears expired token and attempts TOTP auto-login before market opens.
+    # Requires UPSTOX_TOTP_SECRET + UPSTOX_MOBILE + UPSTOX_PIN in .env
+    scheduler.add_job(
+        daily_token_refresh,
+        "cron",
+        hour=3,       # 8:55 AM IST = 3:25 AM UTC
+        minute=25,
+        id="daily_token_refresh_job",
+        max_instances=1,
+        coalesce=True,
+    )
+
+    # Also reset CPR cache at midnight UTC so new day levels are fetched fresh
+    scheduler.add_job(
+        reset_daily_cpr_cache,
+        "cron",
+        hour=0,
+        minute=1,
+        id="daily_cpr_reset_job",
+        max_instances=1,
+        coalesce=True,
+    )
+
     scheduler.start()
-    logger.info("[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP checker + 10m Upstox keepalive.")
+    logger.info(
+        "[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + "
+        "10m keepalive + 8:55AM IST daily token refresh."
+    )
 
 
 # ------------------------------------------------------------------
-# Upstox keepalive (runs every 10 minutes)
+# Daily token refresh (8:55 AM IST = 3:25 AM UTC)
+# ------------------------------------------------------------------
+def daily_token_refresh():
+    """Auto-reconnect Upstox every morning before market opens."""
+    if upstox is None:
+        return
+    logger.info("[DAILY-REFRESH] Running daily Upstox token refresh at 8:55 AM IST...")
+    upstox.daily_auto_reconnect()
+
+
+def reset_daily_cpr_cache():
+    """Clear CPR cache at midnight so fresh levels are fetched on the new trading day."""
+    global _today_cpr_levels, _cpr_date
+    _today_cpr_levels = None
+    _cpr_date = None
+    logger.info("[CPR] Daily CPR cache cleared for new trading day.")
+
+
+# ------------------------------------------------------------------
+# Upstox keepalive (every 10 minutes)
 # ------------------------------------------------------------------
 def keep_upstox_alive():
     if upstox is None:
         return
-
     if not upstox.ensure_authenticated():
         logger.info("[UPSTOX] Keepalive skipped — no valid token available.")
         return
-
     ltp = upstox.get_nifty_price()
     if ltp is not None:
         logger.debug(f"[UPSTOX] Keepalive success — Nifty LTP {ltp}.")
@@ -142,22 +183,19 @@ def keep_upstox_alive():
 
 
 # ------------------------------------------------------------------
-# SL / TP monitor (runs every 30s)
+# SL / TP monitor (every 30s)
 # ------------------------------------------------------------------
 def check_active_position_targets():
     if upstox is None:
         return
 
     from database.db import SessionLocal
-    from datetime import timezone, timedelta
-    _IST = timezone(timedelta(hours=5, minutes=30))
     now_ist = datetime.now(_IST)
 
     db = SessionLocal()
     try:
         open_trade = db.query(Trade).filter(Trade.status == "OPEN").first()
 
-        # ── CHANGE 5: Force squareoff at 3 PM IST ──
         squareoff_cutoff = now_ist.replace(
             hour=settings.SQUAREOFF_HOUR, minute=settings.SQUAREOFF_MIN,
             second=0, microsecond=0
@@ -184,13 +222,12 @@ def check_active_position_targets():
             logger.warning("[CMP_SOURCE=DISCONNECTED] Cannot check SL/TP — no live LTP.")
             return
 
-        # ── CHANGE 1: Live daily loss-limit squareoff ──
         rm_check = RiskManager(db)
         day_state = rm_check.get_or_create_daily_state()
         qty = open_trade.lots * settings.NIFTY_LOT_SIZE
-        if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:  # Long / CE
+        if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
             unrealised = (ltp - open_trade.entry_price) * qty
-        else:                                                   # Short / PE
+        else:
             unrealised = (open_trade.entry_price - ltp) * qty
         total_day_pnl = day_state.realized_pnl + unrealised
         if total_day_pnl <= -settings.DAILY_LOSS_LIMIT:
@@ -204,7 +241,6 @@ def check_active_position_targets():
                 notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(unrealised), total_day_pnl)
             return
 
-        # Normal SL / TP check
         is_sl = is_tp = False
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
             is_sl = ltp <= open_trade.stop_loss
@@ -236,7 +272,7 @@ def check_active_position_targets():
 
 
 # ------------------------------------------------------------------
-# Main strategy tick (runs every 5 minutes)
+# Main strategy tick (every 5 minutes)
 # ------------------------------------------------------------------
 _last_processed_candle_time: Optional[str] = None
 
@@ -247,7 +283,6 @@ def monitor_interval_tick():
     if upstox is None:
         return
 
-    # RULE 1: Market hours gate
     mkt = get_market_status_detail()
     logger.info(
         f"[MARKET_OPEN={mkt['market_open']}] Tick at {mkt['current_ist']} "
@@ -257,7 +292,6 @@ def monitor_interval_tick():
         logger.info("[MARKET_OPEN=False] [STRATEGY_ALLOWED=False] Tick suppressed — market closed.")
         return
 
-    # RULE 3: Auth gate
     if not upstox._is_authenticated():
         logger.warning(
             "[DATA_SOURCE=DISCONNECTED] [STRATEGY_ALLOWED=False] "
@@ -271,7 +305,6 @@ def monitor_interval_tick():
         rm = RiskManager(db)
         daily = rm.get_or_create_daily_state()
 
-        # RULE 2: Trade limit gate
         logger.info(
             f"[TRADES_TODAY={daily.trade_count}/{settings.MAX_DAILY_TRADES}] "
             f"[DATA_SOURCE={upstox.data_source}]"
@@ -317,10 +350,7 @@ def monitor_interval_tick():
 
                 logger.info(f"[LIVE] {name} TRIGGERED | candle={latest_time} close={latest['close']}")
 
-                # ── No new entries after 2 PM IST ──
-                from datetime import timezone as _tz, timedelta as _td
-                _IST_tz = _tz(_td(hours=5, minutes=30))
-                _now_ist = datetime.now(_IST_tz)
+                _now_ist = datetime.now(_IST)
                 _cutoff  = _now_ist.replace(
                     hour=settings.NO_ENTRY_AFTER_HOUR,
                     minute=settings.NO_ENTRY_AFTER_MIN,
@@ -337,7 +367,6 @@ def monitor_interval_tick():
                 if not rm.can_trade():
                     continue
 
-                # Double-lock: re-read trade count atomically before placing
                 daily_now = rm.get_or_create_daily_state()
                 if daily_now.trade_count >= settings.MAX_DAILY_TRADES:
                     logger.warning(
@@ -367,7 +396,7 @@ def monitor_interval_tick():
                         is_paper=(settings.TRADING_MODE == "paper"),
                     )
                     if rec:
-                        rec.stop_loss  = details["stop_loss"]
+                        rec.stop_loss   = details["stop_loss"]
                         rec.take_profit = details["take_profit"]
                         db.commit()
                         logger.info(
@@ -461,8 +490,6 @@ def get_system_status(db: Session = Depends(get_db)):
     }
 
 
-
-
 @app.get("/api/setups")
 def get_active_setups():
     return {
@@ -503,7 +530,6 @@ def get_recent_trades(db: Session = Depends(get_db)):
 
 @app.post("/api/trades/{trade_id}/manual-close")
 def manual_close_trade(trade_id: int, data: Dict[str, Any], db: Session = Depends(get_db)):
-    """Mark an active trade CLOSED_MANUAL when you manually exit it in the broker."""
     trade = db.query(Trade).filter(Trade.id == trade_id, Trade.status == "OPEN").first()
     if not trade:
         raise HTTPException(status_code=404, detail="Open trade not found.")
@@ -522,16 +548,11 @@ def manual_close_trade(trade_id: int, data: Dict[str, Any], db: Session = Depend
     if not closed:
         raise HTTPException(status_code=500, detail="Failed to close trade.")
 
-    return {
-        "status": "success",
-        "message": "Trade marked closed manually.",
-        "trade_id": closed.id,
-    }
+    return {"status": "success", "message": "Trade marked closed manually.", "trade_id": closed.id}
 
 
 @app.post("/api/trading/pause")
 def pause_trading(db: Session = Depends(get_db)):
-    """Pause automated trading for the current day."""
     rm = RiskManager(db)
     state = rm.get_or_create_daily_state()
     state.is_blocked = True
@@ -541,7 +562,6 @@ def pause_trading(db: Session = Depends(get_db)):
 
 @app.post("/api/trading/resume")
 def resume_trading(db: Session = Depends(get_db)):
-    """Resume automated trading for the current day."""
     rm = RiskManager(db)
     state = rm.get_or_create_daily_state()
     state.is_blocked = False
@@ -583,7 +603,7 @@ def update_config(data: dict, db: Session = Depends(get_db)):
             try:
                 with open(sp) as f:
                     secrets = json.load(f)
-            except:
+            except Exception:
                 pass
 
         if "upstox_api_key" in data:
@@ -603,6 +623,7 @@ def update_config(data: dict, db: Session = Depends(get_db)):
             )
         try:
             with open(sp, "w") as f:
+                import json
                 json.dump(secrets, f)
             logger.info(f"Credentials persisted to {sp}")
         except Exception as e:
@@ -636,7 +657,6 @@ def reset_strategy_states():
 
 @app.post("/api/reset-daily")
 def reset_daily_state(db: Session = Depends(get_db)):
-    """Clear today's trade count — for testing purposes only."""
     from datetime import date as date_cls
     today = date_cls.today().strftime("%Y-%m-%d")
     state = db.query(DailyState).filter(DailyState.trade_date == today).first()
@@ -668,12 +688,7 @@ def upstox_session_status(request: Request):
 
 
 @app.get("/api/debug/cpr")
-def debug_cpr(date: Optional[date] = Query(None, description="Target trading date to inspect (YYYY-MM-DD)")):
-    """Return previous-day OHLC and computed CPR levels for diagnostics.
-
-    If `date` is provided, the previous trading day's OHLC for that date will be fetched.
-    Otherwise the most recent previous-day OHLC is returned.
-    """
+def debug_cpr(date: Optional[date] = Query(None, description="Target trading date YYYY-MM-DD")):
     if upstox is None:
         raise HTTPException(status_code=503, detail="Server still initialising")
 
@@ -691,10 +706,6 @@ def debug_cpr(date: Optional[date] = Query(None, description="Target trading dat
 
 @app.get("/api/report/historical")
 def historical_report(date: Optional[date] = Query(None, description="Target date YYYY-MM-DD"), db: Session = Depends(get_db)):
-    """
-    Return actual executed trades from the DB for the given date and aggregated metrics.
-    If `date` is omitted, defaults to today's date (UTC).
-    """
     if date is None:
         date = datetime.utcnow().date()
     try:
@@ -704,20 +715,12 @@ def historical_report(date: Optional[date] = Query(None, description="Target dat
     return report
 
 
-# ------------------------------------------------------------------
-# Backtest endpoint
-# ------------------------------------------------------------------
 @app.get("/api/backtest")
 def run_backtest_endpoint(
     start: str = Query(..., description="Start date YYYY-MM-DD"),
     end:   str = Query(..., description="End date YYYY-MM-DD"),
     db: Session = Depends(get_db)
 ):
-    """
-    Run a historical backtest of all 4 CPR setups over a date range.
-    Fetches real NIFTY 5m data from Upstox for each trading day.
-    Requires a valid Upstox token to fetch historical candles.
-    """
     try:
         start_date = date.fromisoformat(start)
         end_date   = date.fromisoformat(end)
@@ -789,7 +792,7 @@ async def postback(request: Request):
         body = await request.json()
         logger.info(f"/postback: {body}")
         return {"status": "received"}
-    except:
+    except Exception:
         return {"status": "received_raw"}
 
 
@@ -799,7 +802,7 @@ async def webhook(request: Request):
         body = await request.json()
         notify_signal_detected(body.get("source","Webhook"), body.get("message","Alert"))
         return {"status": "ok"}
-    except:
+    except Exception:
         return {"status": "ok"}
 
 
