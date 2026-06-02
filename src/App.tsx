@@ -783,7 +783,7 @@ export default function App() {
                           <h3 className="text-sm font-bold text-white mt-1">{ss.name}</h3>
                         </div>
                         <span className={`text-[10px] font-mono uppercase font-bold ${ss.state > 3 ? `text-${c}-400` : ss.state > 0 ? "text-amber-400 animate-pulse" : "text-slate-500"}`}>
-                          {ss.state === 0 ? "Idle" : ss.state === 4 ? `CONFIRMED` : `STEP ${ss.state}`}
+                          {["IDLE","BROKEN","RECOVERED","ARMED"][ss.state] || "IDLE"}
                         </span>
                       </div>
                       <div className="flex gap-1.5 mt-4">
@@ -861,7 +861,7 @@ export default function App() {
                   {[
                     { label: "Breakout Window (bars)", key: "failWin" as const, type: "number" },
                     { label: "Retest Timeout (bars)",  key: "retWin"  as const, type: "number" },
-                    { label: "Confirm Window (bars)",  key: "conWin"  as const, type: "number" },
+                    { label: "Entry Window (bars)",    key: "conWin"  as const, type: "number" },
                     { label: "Retest Tolerance (pts)", key: "retTol"  as const, type: "decimal" },
                     { label: "SL Buffer (pts)",        key: "slBuf"   as const, type: "decimal" },
                     { label: "Loss Limit (₹)",         key: "lossLimit" as const, type: "number" },
@@ -1093,23 +1093,37 @@ export default function App() {
                     <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
                       <h4 className="text-sm font-bold text-slate-100">{key}: {setup.name}</h4>
                       <span className="text-xs px-2.5 py-1 rounded font-bold font-mono bg-slate-800 text-slate-400">
-                        STAGE {setup.state} — {["IDLE","BROKEN","RECOVERED","RETESTED","CONFIRMED"][setup.state] || "IDLE"}
+                        STAGE {setup.state} — {["IDLE","BROKEN","RECOVERED","RETESTED (ARMED)"][setup.state] || "IDLE"}
                       </span>
                     </div>
-                    <div className="grid grid-cols-5 gap-2">
-                      {["Breakout","Recovery","Retest","Confirm","Execute"].map((label, sIdx) => {
-                        const isDone = setup.state >= sIdx + 1;
+                    <div className="grid grid-cols-4 gap-2">
+                      {[
+                        { label: "Breakout",     desc: "hi+cl beyond level" },
+                        { label: "Recovery",     desc: "close back inside"   },
+                        { label: "Retest",       desc: "touches level again" },
+                        { label: "Entry Armed",  desc: "cross retest hi/lo"  },
+                      ].map(({ label, desc }, sIdx) => {
+                        const isDone    = setup.state >= sIdx + 1;
+                        const isCurrent = setup.state === sIdx + 1;
                         return (
-                          <div key={label} className={`p-3 rounded border flex flex-col gap-1 ${isDone ? "bg-emerald-950/20 text-emerald-400 border-emerald-900/60" : "bg-slate-950/40 text-slate-600 border-slate-900/40"}`}>
+                          <div key={label} className={`p-3 rounded border flex flex-col gap-1 transition-all ${
+                            isDone
+                              ? "bg-emerald-950/20 text-emerald-400 border-emerald-900/60"
+                              : isCurrent
+                              ? "bg-amber-950/20 text-amber-400 border-amber-900/60 animate-pulse"
+                              : "bg-slate-950/40 text-slate-600 border-slate-900/40"
+                          }`}>
                             <span className="text-[10px] font-mono font-bold">Step 0{sIdx+1}</span>
                             <span className="text-xs font-bold">{label}</span>
+                            <span className="text-[9px] text-slate-500 font-mono leading-tight">{desc}</span>
                           </div>
                         );
                       })}
                     </div>
                     <div className="mt-3 grid grid-cols-2 gap-3 text-xs font-mono bg-slate-950 p-3 rounded border border-slate-900">
-                      <div><span className="text-slate-500">Retest H/L: </span><span className="text-slate-300">{setup.retestHigh || "--"} / {setup.retestLow || "--"}</span></div>
-                      <div><span className="text-slate-500">Confirm H/L: </span><span className="text-slate-300">{setup.confirmationHigh || "--"} / {setup.confirmationLow || "--"}</span></div>
+                      <div><span className="text-slate-500">Retest High: </span><span className="text-emerald-400 font-bold">{setup.retestHigh || "--"}</span></div>
+                      <div><span className="text-slate-500">Retest Low: </span><span className="text-emerald-400 font-bold">{setup.retestLow || "--"}</span></div>
+                      <div className="col-span-2 text-[10px] text-slate-600">Entry triggers when next candle crosses retest low (shorts) or retest high (longs)</div>
                     </div>
                   </div>
                 );
