@@ -79,12 +79,15 @@ class SetupStateMachine:
 
         self.fail_win  = settings.FAILURE_WINDOW
         self.ret_win   = settings.RETEST_WINDOW
+        self.con_win   = settings.CONFIRMATION_WINDOW
         self.ent_win   = settings.ENTRY_TRIGGER_WINDOW
         self.ret_tol   = settings.RETEST_TOLERANCE
 
         # Retest candle trackers
         self.r_high: Optional[float] = None
         self.r_low:  Optional[float] = None
+        self.c_high: Optional[float] = None
+        self.c_low:  Optional[float] = None
 
     def bars_elapsed(self, idx: int) -> int:
         return idx - self.state_bar
@@ -138,7 +141,8 @@ class SetupStateMachine:
 
         if direction == "short":
             rr_tp  = entry - (settings.REWARD_RATIO * risk)
-            final_tp = max(rr_tp, cpr_level)   # closer to entry = higher price
+            cpr_target = cpr_level + settings.TARGET_BUFFER
+            final_tp = max(rr_tp, cpr_target)   # closer to entry = higher price
             # 1:1 check — TP must be at least 1× risk away from entry
             if final_tp >= entry - risk:
                 logger.info(
@@ -148,7 +152,8 @@ class SetupStateMachine:
                 return None
         else:  # long
             rr_tp  = entry + (settings.REWARD_RATIO * risk)
-            final_tp = min(rr_tp, cpr_level)   # closer to entry = lower price
+            cpr_target = cpr_level - settings.TARGET_BUFFER
+            final_tp = min(rr_tp, cpr_target)   # closer to entry = lower price
             # 1:1 check
             if final_tp <= entry + risk:
                 logger.info(
@@ -207,11 +212,21 @@ class SetupStateMachine:
                     self.reset_state(idx, "Retest window elapsed")
 
             elif self.state == 3:
-                # Change 2: entry when lo crosses below retest candle's low
-                if self.bars_elapsed(idx) <= self.ent_win:
+                if self.bars_elapsed(idx) <= self.con_win:
                     if lo < self.r_low:
-                        # SL = this entry candle's high + buffer
-                        _sl    = hi + settings.SL_BUFFER
+                        self.state = 4
+                        self.state_bar = idx
+                        self.c_low = lo
+                        logger.info(
+                            f"SETUP_A: bar {idx} STATE4 CONFIRMED. lo={lo} < r_low={self.r_low}"
+                        )
+                else:
+                    self.reset_state(idx, "Confirmation window elapsed")
+
+            elif self.state == 4:
+                if self.bars_elapsed(idx) <= self.ent_win:
+                    if lo < self.c_low:
+                        _sl    = self.r_high + settings.SL_BUFFER
                         _entry = cl
                         _tp    = self._calc_target(_entry, _sl, levels.tc, "short")
                         if _tp is not None and not is_inside_cpr(cl, levels):
@@ -225,7 +240,7 @@ class SetupStateMachine:
                                 "lots":          settings.POSITION_LOTS,
                             }
                             logger.info(
-                                f"SETUP_A: bar {idx} ENTRY. lo={lo} < r_low={self.r_low} "
+                                f"SETUP_A: bar {idx} ENTRY. lo={lo} < c_low={self.c_low} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
@@ -272,8 +287,20 @@ class SetupStateMachine:
                     self.reset_state(idx, "Retest window elapsed")
 
             elif self.state == 3:
-                if self.bars_elapsed(idx) <= self.ent_win:
+                if self.bars_elapsed(idx) <= self.con_win:
                     if hi > self.r_high:
+                        self.state = 4
+                        self.state_bar = idx
+                        self.c_high = hi
+                        logger.info(
+                            f"SETUP_B: bar {idx} STATE4 CONFIRMED. hi={hi} > r_high={self.r_high}"
+                        )
+                else:
+                    self.reset_state(idx, "Confirmation window elapsed")
+
+            elif self.state == 4:
+                if self.bars_elapsed(idx) <= self.ent_win:
+                    if hi > self.c_high:
                         _sl    = lo - settings.SL_BUFFER
                         _entry = cl
                         _tp    = self._calc_target(_entry, _sl, levels.bc, "long")
@@ -288,7 +315,7 @@ class SetupStateMachine:
                                 "lots":          settings.POSITION_LOTS,
                             }
                             logger.info(
-                                f"SETUP_B: bar {idx} ENTRY. hi={hi} > r_high={self.r_high} "
+                                f"SETUP_B: bar {idx} ENTRY. hi={hi} > c_high={self.c_high} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
@@ -340,8 +367,20 @@ class SetupStateMachine:
                     self.reset_state(idx, "Retest window elapsed")
 
             elif self.state == 3:
-                if self.bars_elapsed(idx) <= self.ent_win:
+                if self.bars_elapsed(idx) <= self.con_win:
                     if hi > self.r_high:
+                        self.state = 4
+                        self.state_bar = idx
+                        self.c_high = hi
+                        logger.info(
+                            f"SETUP_C: bar {idx} STATE4 CONFIRMED. hi={hi} > r_high={self.r_high}"
+                        )
+                else:
+                    self.reset_state(idx, "Confirmation window elapsed")
+
+            elif self.state == 4:
+                if self.bars_elapsed(idx) <= self.ent_win:
+                    if hi > self.c_high:
                         _sl    = lo - settings.SL_BUFFER
                         _entry = cl
                         _tp    = self._calc_target(_entry, _sl, levels.r1, "long")
@@ -356,7 +395,7 @@ class SetupStateMachine:
                                 "lots":          settings.POSITION_LOTS,
                             }
                             logger.info(
-                                f"SETUP_C: bar {idx} ENTRY. hi={hi} > r_high={self.r_high} "
+                                f"SETUP_C: bar {idx} ENTRY. hi={hi} > c_high={self.c_high} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
@@ -405,9 +444,21 @@ class SetupStateMachine:
                     self.reset_state(idx, "Retest window elapsed")
 
             elif self.state == 3:
-                if self.bars_elapsed(idx) <= self.ent_win:
+                if self.bars_elapsed(idx) <= self.con_win:
                     if lo < self.r_low:
-                        _sl    = hi + settings.SL_BUFFER
+                        self.state = 4
+                        self.state_bar = idx
+                        self.c_low = lo
+                        logger.info(
+                            f"SETUP_D: bar {idx} STATE4 CONFIRMED. lo={lo} < r_low={self.r_low}"
+                        )
+                else:
+                    self.reset_state(idx, "Confirmation window elapsed")
+
+            elif self.state == 4:
+                if self.bars_elapsed(idx) <= self.ent_win:
+                    if lo < self.c_low:
+                        _sl    = self.r_high + settings.SL_BUFFER
                         _entry = cl
                         _tp    = self._calc_target(_entry, _sl, levels.s1, "short")
                         if _tp is not None and not is_inside_cpr(cl, levels):
@@ -421,7 +472,7 @@ class SetupStateMachine:
                                 "lots":          settings.POSITION_LOTS,
                             }
                             logger.info(
-                                f"SETUP_D: bar {idx} ENTRY. lo={lo} < r_low={self.r_low} "
+                                f"SETUP_D: bar {idx} ENTRY. lo={lo} < c_low={self.c_low} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
