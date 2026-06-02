@@ -184,7 +184,8 @@ def run_backtest(
         day_trades:       List[Dict] = []
         trade_count:      int        = 0
         open_trade:       Optional[Dict] = None
-        day_realized_pnl: float      = 0.0
+        day_realized_pnl:     float      = 0.0
+        open_trade_exit_time: Optional[str] = None
 
         for idx, candle in enumerate(candles):
             time_str = candle.get("time", "")
@@ -196,7 +197,7 @@ def run_backtest(
 
             # 3 PM — force close any open trade then stop
             if bar_mins >= squareoff_cutoff:
-                if open_trade and open_trade.get("status") == "OPEN_PENDING":
+                if open_trade:
                     exit_p = candle["close"]
                     qty = lots * LOT_SIZE
                     if open_trade["trade_type"] == "SELL":
@@ -212,11 +213,12 @@ def run_backtest(
                     day_realized_pnl += pnl
                 break
 
-            # Clear open_trade if it has already been exited (exit_time reached)
-            if open_trade and open_trade.get("status") != "OPEN_PENDING":
+            # Clear open_trade once candle time has passed the trade's exit_time
+            if open_trade and open_trade_exit_time and time_str >= open_trade_exit_time:
                 open_trade = None
+                open_trade_exit_time = None
 
-            # Already in a trade
+            # Already in a trade — skip this candle
             if open_trade:
                 continue
 
@@ -274,7 +276,11 @@ def run_backtest(
                 all_trades.append(trade_rec)
                 trade_count      += 1
                 day_realized_pnl += exit_info["pnl"]
-                open_trade        = trade_rec   # mark as active until exit_time reached
+                # Track open trade by exit_time — block further entries until
+                # the candle loop reaches the exit candle (mirrors live bot's
+                # "only 1 trade at a time" rule)
+                open_trade_exit_time = exit_info["exit_time"]
+                open_trade           = trade_rec
 
                 logger.info(
                     f"[BACKTEST] {trading_date} {name} {trade_type} "
