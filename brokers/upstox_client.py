@@ -12,7 +12,7 @@ logger = logging.getLogger("CPR_System.Upstox")
 # ---------------------------------------------------------------------------
 _IST = timezone(timedelta(hours=5, minutes=30))
 
-# NSE holidays 2025-2026 — add/remove as needed
+# NSE holidays 2025-2026
 _NSE_HOLIDAYS = {
     "2025-01-26","2025-02-26","2025-03-14","2025-03-31",
     "2025-04-10","2025-04-14","2025-04-18","2025-05-01",
@@ -45,25 +45,104 @@ def get_market_status_detail() -> dict:
     }
 
 # ---------------------------------------------------------------------------
-# Token expiry helper
-# Upstox tokens expire at MIDNIGHT IST every day — NOT 24h rolling.
+# Token expiry helpers
+# FIX: unified naming — was _token_expires_at_ist in one place,
+#      _token_expires_at_midnight_ist in another → caused NameError crash
 # ---------------------------------------------------------------------------
-def _token_expires_at_ist(authenticated_at: datetime) -> datetime:
+def _token_expires_at_midnight_ist(authenticated_at: datetime) -> datetime:
     """
     Returns the token expiry time in UTC.
-    Upstox tokens actually expire around 3:30 AM IST the following day
-    (after overnight settlement), NOT at midnight.
-    Using 3:00 AM IST as a safe conservative cutoff.
+    Upstox tokens expire around 3:00 AM IST the following day (safe conservative cutoff).
     """
     auth_ist = authenticated_at.replace(tzinfo=timezone.utc).astimezone(_IST)
-    # Expiry = 3:00 AM IST the next calendar day
     expiry_ist = auth_ist.replace(hour=3, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    return expiry_ist.astimezone(timezone.utc).replace(tzinfo=None)  # back to naive UTC
+    return expiry_ist.astimezone(timezone.utc).replace(tzinfo=None)
+
+# Keep old name as alias so any other code that references it still works
+_token_expires_at_ist = _token_expires_at_midnight_ist
 
 def _is_token_expired(last_auth: datetime) -> bool:
     """True if the token has crossed its 3 AM IST expiry."""
-    expiry_utc = _token_expires_at_ist(last_auth)
+    expiry_utc = _token_expires_at_midnight_ist(last_auth)
     return datetime.utcnow() >= expiry_utc
+
+
+# ---------------------------------------------------------------------------
+# TOTP auto-token generation
+# Set UPSTOX_TOTP_SECRET in your .env to enable fully automatic daily login.
+# ---------------------------------------------------------------------------
+def _try_totp_auto_login(upstox_client: "UpstoxClient") -> bool:
+    """
+    Attempt to generate a new Upstox token automatically using TOTP.
+    Requires:
+      - UPSTOX_TOTP_SECRET in .env (base32 secret from Upstox TOTP setup)
+      - UPSTOX_MOBILE in .env (your Upstox registered mobile number)
+      - UPSTOX_PIN in .env (your 6-digit Upstox PIN)
+      - pip install upstox-totp
+    Returns True if a new token was obtained and saved.
+    """
+    import os
+    totp_secret = os.getenv("UPSTOX_TOTP_SECRET", "").strip()
+    mobile      = os.getenv("UPSTOX_MOBILE", "").strip()
+    pin         = os.getenv("UPSTOX_PIN", "").strip()
+
+    if not totp_secret or not mobile or not pin:
+        logger.info("[TOTP] UPSTOX_TOTP_SECRET / UPSTOX_MOBILE / UPSTOX_PIN not set — skipping auto-login.")
+        return False
+
+    try:
+        from upstox_totp import UpstoxTOTP
+        logger.info("[TOTP] Attempting automatic daily token generation via TOTP...")
+        upx = UpstoxTOTP(
+            mobile=mobile,
+            pin=pin,
+            totp_secret=totp_secret,
+            api_key=upstox_client.api_key,
+            api_secret=upstox_client.api_secret,
+            redirect_uri=upstox_client.redirect_uri,
+        )
+        result = upx.get_access_token()
+        token = result.access_token if hasattr(result, "access_token") else result.get("access_token")
+        if not token:
+            logger.error("[TOTP] TOTP login returned no access_token.")
+            return False
+
+        # Persist to DB
+        from database.db import SessionLocal
+        from database.models import UpstoxToken
+        if SessionLocal:
+            db = SessionLocal()
+            try:
+                db.query(UpstoxToken).delete()
+                now = datetime.utcnow()
+                db.add(UpstoxToken(
+                    access_token=token,
+                    status="Connected",
+                    expiry_time=_token_expires_at_midnight_ist(now),
+                    last_authenticated_at=now,
+                ))
+                db.commit()
+                logger.info("[TOTP] ✅ New token saved to DB successfully.")
+            except Exception as e:
+                logger.error(f"[TOTP] DB write error: {e}")
+                return False
+            finally:
+                db.close()
+
+        # Cache in memory
+        upstox_client._access_token = token
+        upstox_client._token_loaded_at = datetime.utcnow()
+        upstox_client.data_source = "UPSTOX LIVE"
+        upstox_client.websocket_status = "Connected"
+        logger.info("[TOTP] ✅ Auto-login successful. Token active.")
+        return True
+
+    except ImportError:
+        logger.warning("[TOTP] upstox-totp package not installed. Run: pip install upstox-totp")
+        return False
+    except Exception as e:
+        logger.error(f"[TOTP] Auto-login failed: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -72,21 +151,19 @@ def _is_token_expired(last_auth: datetime) -> bool:
 class UpstoxClient:
     def __init__(self):
         import os, json
-        self.api_key    = settings.UPSTOX_API_KEY
-        self.api_secret = settings.UPSTOX_API_SECRET
+        self.api_key      = settings.UPSTOX_API_KEY
+        self.api_secret   = settings.UPSTOX_API_SECRET
         self.redirect_uri = settings.UPSTOX_REDIRECT_URI
-        self.base_url   = "https://api.upstox.com/v2"
+        self.base_url     = "https://api.upstox.com/v2"
 
-        # In-memory token cache — cleared on 401 or midnight expiry
         self._access_token: Optional[str] = None
-        self._token_loaded_at: Optional[datetime] = None   # when we last loaded/stored it
+        self._token_loaded_at: Optional[datetime] = None
 
-        # Dashboard status fields
         self.last_live_candle_time: Optional[str] = None
         self.websocket_status: str = "Disconnected"
         self.data_source: str = "DISCONNECTED"
 
-        # Load saved API credentials (written by /api/config)
+        # Load saved API credentials
         secrets_path = getattr(settings, "UPSTOX_SECRETS_PATH", None)
         if secrets_path and os.path.exists(secrets_path):
             try:
@@ -106,7 +183,6 @@ class UpstoxClient:
     # Token management
     # ------------------------------------------------------------------
     def _clear_token(self):
-        """Wipe the in-memory token so the next call re-loads from DB."""
         self._access_token = None
         self._token_loaded_at = None
         self.data_source = "DISCONNECTED"
@@ -115,23 +191,15 @@ class UpstoxClient:
     def get_token(self) -> Optional[str]:
         """
         Returns a valid access token, or None.
-
-        FIX 1: Check midnight-IST expiry, not just 24h rolling window.
-        FIX 2: Always re-read from DB when in-memory token is absent (handles server restarts).
-        FIX 3: Clear stale cached token when expiry detected.
+        Checks midnight-IST expiry. Re-reads from DB on cache miss.
         """
-        # If we have a cached token, verify it hasn't crossed midnight IST
         if self._access_token and self._token_loaded_at:
             if _is_token_expired(self._token_loaded_at):
-                logger.warning(
-                    "[TOKEN] In-memory token has crossed Upstox midnight-IST expiry. "
-                    "Clearing cache — re-authenticate via dashboard."
-                )
+                logger.warning("[TOKEN] In-memory token expired (past 3 AM IST). Clearing.")
                 self._clear_token()
                 return None
             return self._access_token
 
-        # No cached token — try to load from DB
         from database.db import SessionLocal
         if SessionLocal is None:
             return None
@@ -147,15 +215,10 @@ class UpstoxClient:
             if last_auth is None:
                 return None
 
-            # FIX 1: Use midnight-IST expiry, not 24h rolling
             if _is_token_expired(last_auth):
-                logger.warning(
-                    "[TOKEN] DB token has crossed Upstox midnight-IST expiry. "
-                    "Re-authenticate via dashboard."
-                )
+                logger.warning("[TOKEN] DB token expired (past 3 AM IST). Re-authenticate.")
                 return None
 
-            # Token is valid — cache it
             self._access_token = tok.access_token
             self._token_loaded_at = last_auth
             logger.info("[TOKEN] Valid token loaded from DB.")
@@ -168,10 +231,42 @@ class UpstoxClient:
             db.close()
 
     def _is_authenticated(self) -> bool:
-        """True only when token is valid and credentials are real (not mock defaults)."""
         if self.api_key in ("mock_api_key", "mock_key", "", None):
             return False
         return self.get_token() is not None
+
+    # ------------------------------------------------------------------
+    # Daily auto-reconnect (called by scheduler at 8:55 AM IST)
+    # ------------------------------------------------------------------
+    def daily_auto_reconnect(self):
+        """
+        Called every morning at 8:55 AM IST by the scheduler.
+        Clears the expired token and attempts TOTP auto-login.
+        Falls back gracefully — manual OAuth login still works if TOTP not configured.
+        """
+        logger.info("[AUTO-RECONNECT] Daily token refresh starting...")
+        self._clear_token()
+
+        if _try_totp_auto_login(self):
+            logger.info("[AUTO-RECONNECT] ✅ TOTP auto-login successful.")
+            try:
+                from telegram.bot import notify_signal_detected
+                notify_signal_detected("SYSTEM", "✅ Upstox auto-reconnected via TOTP. System ready.")
+            except Exception:
+                pass
+        else:
+            logger.warning(
+                "[AUTO-RECONNECT] TOTP not configured or failed. "
+                "Please log in manually via the Dashboard → Upstox tab."
+            )
+            try:
+                from telegram.bot import notify_system_error
+                notify_system_error(
+                    "⚠️ Upstox token expired. TOTP auto-login not available.\n"
+                    "Please log in via Dashboard → Upstox tab before 9:15 AM."
+                )
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Connection status (for dashboard)
@@ -203,7 +298,6 @@ class UpstoxClient:
             last_auth = tok.last_authenticated_at or tok.created_at
             expired = _is_token_expired(last_auth)
             expiry_utc = _token_expires_at_midnight_ist(last_auth)
-            # Convert to IST for display
             expiry_ist = expiry_utc.replace(tzinfo=timezone.utc).astimezone(_IST)
 
             if expired:
@@ -239,19 +333,12 @@ class UpstoxClient:
             db.close()
 
     def ensure_authenticated(self) -> bool:
-        """
-        Load a valid token from DB and mark Upstox as live if available.
-        Proactive LTP validation is only done during market hours (9:00-15:45 IST)
-        to avoid false 401s from Upstox's market-data endpoint during off-hours.
-        """
         token = self.get_token()
         if token is None:
             self.data_source = "DISCONNECTED"
             self.websocket_status = "Disconnected"
             return False
 
-        # Only validate against live LTP during market hours
-        # Outside market hours the LTP endpoint can return 401 even for valid tokens
         now_ist = datetime.now(_IST)
         market_open  = now_ist.replace(hour=9,  minute=0,  second=0, microsecond=0)
         market_close = now_ist.replace(hour=15, minute=45, second=0, microsecond=0)
@@ -264,10 +351,7 @@ class UpstoxClient:
             try:
                 resp = requests.get(url, headers=headers, params=params, timeout=5)
                 if resp.status_code == 401:
-                    logger.warning(
-                        "[KEEPALIVE] Token rejected by Upstox (401) during market hours. "
-                        "Clearing token — re-authenticate via dashboard."
-                    )
+                    logger.warning("[KEEPALIVE] Token rejected (401) during market hours. Clearing.")
                     self._clear_token()
                     self._invalidate_db_token()
                     self.data_source = "DISCONNECTED"
@@ -276,7 +360,6 @@ class UpstoxClient:
                 logger.debug(f"[KEEPALIVE] LTP validation OK (status {resp.status_code})")
             except Exception as e:
                 logger.warning(f"[KEEPALIVE] LTP validation network error: {e} — keeping token")
-                # Network blip — don't clear token
 
         self.data_source = "UPSTOX LIVE"
         self.websocket_status = "Connected"
@@ -292,7 +375,6 @@ class UpstoxClient:
                 f"?response_type=code&client_id={self.api_key}&redirect_uri={r_uri}")
 
     def authenticate(self, auth_code: str, redirect_uri: Optional[str] = None) -> bool:
-        """Exchange auth code for access token and persist to DB."""
         url = f"{self.base_url}/login/authorization/token"
         r_uri = redirect_uri or self.redirect_uri
         data = {
@@ -312,7 +394,6 @@ class UpstoxClient:
                     logger.error("OAuth response missing access_token")
                     return False
 
-                # Persist to DB
                 from database.db import SessionLocal
                 from database.models import UpstoxToken
                 if SessionLocal:
@@ -320,11 +401,10 @@ class UpstoxClient:
                     try:
                         db.query(UpstoxToken).delete()
                         now = datetime.utcnow()
-                        expiry_at = _token_expires_at_midnight_ist(now)
                         db.add(UpstoxToken(
                             access_token=token,
                             status="Connected",
-                            expiry_time=expiry_at,
+                            expiry_time=_token_expires_at_midnight_ist(now),
                             last_authenticated_at=now,
                         ))
                         db.commit()
@@ -334,7 +414,6 @@ class UpstoxClient:
                     finally:
                         db.close()
 
-                # Cache in memory
                 self._access_token = token
                 self._token_loaded_at = datetime.utcnow()
                 self.data_source = "UPSTOX LIVE"
@@ -352,17 +431,6 @@ class UpstoxClient:
     # Live data methods
     # ------------------------------------------------------------------
     def get_nifty_ohlc_5m(self) -> List[Dict]:
-        """
-        Fetch today's completed 5-minute NIFTY candles from Upstox.
-
-        FIX: URL-encode the instrument key so '|' and ' ' are safe in the path.
-        FIX: Clear token on 401 so subsequent calls force re-auth.
-        RULE 3: Return [] on any failure — no mock/simulation fallback ever.
-
-        Endpoint: GET /v2/historical-candle/intraday/{instrument_key}/1minute
-        Upstox candle format: [timestamp, open, high, low, close, volume, oi]
-        Newest candle first — reversed to chronological order before aggregation.
-        """
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — no candles fetched.")
             self.data_source = "DISCONNECTED"
@@ -370,7 +438,6 @@ class UpstoxClient:
             return []
 
         token = self.get_token()
-        # FIX: URL-encode the instrument key (| and space must be encoded in URL path)
         instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
         url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -391,7 +458,7 @@ class UpstoxClient:
                      "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
                     for c in raw
                 ]
-                one_min.reverse()   # Upstox returns newest first → make chronological
+                one_min.reverse()
 
                 five_min = self._aggregate_to_5min(one_min)
                 self.data_source = "UPSTOX LIVE"
@@ -423,10 +490,6 @@ class UpstoxClient:
             return []
 
     def _aggregate_to_5min(self, one_min_candles: List[Dict]) -> List[Dict]:
-        """
-        Aggregate 1-minute bars into 5-minute bars aligned to 09:15 NSE grid.
-        Only returns fully completed bars (skips the last/in-progress bar).
-        """
         from collections import defaultdict
         buckets: dict = defaultdict(list)
 
@@ -445,9 +508,9 @@ class UpstoxClient:
         keys = sorted(buckets)
         for i, bucket in enumerate(keys):
             bars = buckets[bucket]
-            if i == len(keys) - 1:  # skip last (possibly incomplete) bar
+            if i == len(keys) - 1:
                 continue
-            if len(bars) < 5:       # incomplete historical bucket
+            if len(bars) < 5:
                 continue
             five_min.append({
                 "time":   bucket.strftime("%Y-%m-%dT%H:%M:%S+05:30"),
@@ -460,24 +523,10 @@ class UpstoxClient:
         return five_min
 
     def _fetch_intraday_1m_for_date(self, trading_date: date, token: str) -> List[Dict]:
-        """
-        Fetch 1-minute NIFTY candles for a specific date.
-
-        Upstox has TWO different endpoints:
-          - /intraday/{key}/1minute          → today only, no date params
-          - /historical-candle/{key}/1minute/{to}/{from}  → past dates
-
-        For backtest we always use the historical endpoint, even for today,
-        since intraday endpoint ignores date params entirely.
-
-        Upstox historical endpoint date format: YYYY-MM-DD (date only, no time)
-        Returns candles newest-first → we reverse to chronological.
-        """
         instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
         today = datetime.now(_IST).date()
 
         if trading_date >= today:
-            # Use intraday endpoint for today
             url = f"{self.base_url}/historical-candle/intraday/{instrument_key}/1minute"
             headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
             try:
@@ -486,9 +535,6 @@ class UpstoxClient:
                 logger.error(f"[HISTORICAL] Network error (intraday) for {trading_date}: {e}")
                 return []
         else:
-            # Use historical endpoint for past dates
-            # Format: /historical-candle/{key}/1minute/{to_date}/{from_date}
-            # Both dates must be the same trading day for intraday data
             date_str = trading_date.strftime("%Y-%m-%d")
             url = f"{self.base_url}/historical-candle/{instrument_key}/1minute/{date_str}/{date_str}"
             headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
@@ -509,7 +555,7 @@ class UpstoxClient:
                  "low": float(c[3]), "close": float(c[4]), "volume": int(c[5])}
                 for c in raw
             ]
-            one_min.reverse()   # Upstox returns newest-first → make chronological
+            one_min.reverse()
             logger.info(f"[HISTORICAL] Got {len(one_min)} 1m candles for {trading_date}")
             return one_min
         elif resp.status_code == 401:
@@ -538,11 +584,9 @@ class UpstoxClient:
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — historical 5m candles skipped.")
             return []
-
         token = self.get_token()
         if token is None:
             return []
-
         one_min = self._fetch_intraday_1m_for_date(trading_date, token)
         return self._aggregate_to_5min(one_min)
 
@@ -550,7 +594,6 @@ class UpstoxClient:
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
             return None
-
         token = self.get_token()
         if token is None:
             return None
@@ -581,7 +624,6 @@ class UpstoxClient:
                 logger.warning(f"[HISTORICAL] No prior trading day OHLC returned for {target_date}.")
                 return None
             elif resp.status_code == 401:
-                # Same as above — don't clear on off-hours 401
                 now_ist = datetime.now(_IST)
                 is_mkt = (now_ist.replace(hour=9,minute=0,second=0,microsecond=0)
                           <= now_ist <=
@@ -602,17 +644,6 @@ class UpstoxClient:
             return None
 
     def get_nifty_price(self) -> Optional[float]:
-        """
-        Fetch current Nifty 50 LTP from Upstox.
-
-        FIX: Use params={} so requests URL-encodes the instrument key automatically.
-        FIX: Clear token on 401.
-        RULE 3: Return None if unauthenticated or API error — no fallback value.
-
-        Endpoint: GET /v2/market-quote/ltp
-        Response: {"data": {"NSE_INDEX:Nifty 50": {"last_price": 24105.35}}}
-        Note: Upstox returns ':' not '|' in the response key.
-        """
         if not self._is_authenticated():
             logger.debug("[CMP_SOURCE=DISCONNECTED] Not authenticated — LTP skipped.")
             return None
@@ -620,14 +651,12 @@ class UpstoxClient:
         token = self.get_token()
         url = f"{self.base_url}/market-quote/ltp"
         headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        # FIX: Pass as params dict — requests handles URL-encoding automatically
         params = {"instrument_key": "NSE_INDEX|Nifty 50"}
 
         try:
             resp = requests.get(url, headers=headers, params=params, timeout=8)
             if resp.status_code == 200:
                 d = resp.json().get("data", {})
-                # Upstox returns the key with ':' in the response body
                 ltp_data = (d.get("NSE_INDEX:Nifty 50")
                             or d.get("NSE_INDEX|Nifty 50")
                             or next(iter(d.values()), {}))
@@ -637,7 +666,6 @@ class UpstoxClient:
                     return float(ltp)
                 logger.warning(f"[LIVE] LTP key not found in response: {d}")
                 return None
-
             elif resp.status_code == 401:
                 logger.error("[TOKEN] LTP call rejected (401). Clearing token cache.")
                 self._clear_token()
@@ -646,28 +674,18 @@ class UpstoxClient:
             else:
                 logger.error(f"[LIVE] LTP fetch failed (HTTP {resp.status_code}): {resp.text}")
                 return None
-
         except Exception as e:
             logger.error(f"Error fetching LTP: {e}")
             return None
 
     def get_previous_day_ohlc(self) -> Optional[Dict]:
-        """
-        Fetch previous trading day OHLC for CPR calculation.
-        FIX: URL-encode instrument key in path.
-        RULE 3: Return None if unauthenticated — no hardcoded fallback.
-
-        Endpoint: GET /v2/historical-candle/{instrument_key}/day/{to}/{from}
-        Candle format: [timestamp, open, high, low, close, volume, oi]
-        Newest first.
-        """
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
             return None
 
         token = self.get_token()
         today = datetime.now(_IST).date()
-        from_d = (today - timedelta(days=7)).strftime("%Y-%m-%d")  # wider window for holidays
+        from_d = (today - timedelta(days=7)).strftime("%Y-%m-%d")
         to_d = today.strftime("%Y-%m-%d")
         instrument_key = quote("NSE_INDEX|Nifty 50", safe="")
         url = f"{self.base_url}/historical-candle/{instrument_key}/day/{to_d}/{from_d}"
@@ -692,7 +710,7 @@ class UpstoxClient:
                     logger.info(f"[LIVE] Prev day OHLC: H={h} L={l} C={c}")
                     return {"high": h, "low": l, "close": c}
 
-                logger.warning("[LIVE] No prior trading day OHLC returned for prev OHLC.")
+                logger.warning("[LIVE] No prior trading day OHLC returned.")
                 return None
 
             elif resp.status_code == 401:
@@ -717,7 +735,6 @@ class UpstoxClient:
             return None
 
     def _invalidate_db_token(self):
-        """Mark the DB token as expired so the UI shows correct state."""
         try:
             from database.db import SessionLocal
             from database.models import UpstoxToken
