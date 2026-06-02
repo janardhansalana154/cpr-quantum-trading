@@ -172,6 +172,13 @@ def reset_daily_cpr_cache():
 def keep_upstox_alive():
     if upstox is None:
         return
+    
+    # Skip keepalive outside market hours to avoid 401 errors from closed markets
+    mkt = get_market_status_detail()
+    if not mkt["market_open"]:
+        logger.debug("[UPSTOX] Keepalive skipped — market is closed.")
+        return
+    
     if not upstox.ensure_authenticated():
         logger.info("[UPSTOX] Keepalive skipped — no valid token available.")
         return

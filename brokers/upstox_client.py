@@ -208,6 +208,21 @@ class UpstoxClient:
         if self._token_loaded_at and _is_token_expired(self._token_loaded_at):
             return False
         return True
+    
+    def _is_token_expiring_soon(self, buffer_hours: int = 2) -> bool:
+        """Check if token will expire within buffer_hours."""
+        if not self._token_expires_at:
+            return False
+        time_until_expiry = self._token_expires_at - datetime.utcnow()
+        return time_until_expiry.total_seconds() < (buffer_hours * 3600)
+    
+    @staticmethod
+    def _token_expiring_soon_static(expiry_at: datetime, buffer_hours: int = 2) -> bool:
+        """Static version: check if expiry_at is within buffer_hours from now."""
+        if not expiry_at:
+            return False
+        time_until_expiry = expiry_at - datetime.utcnow()
+        return time_until_expiry.total_seconds() < (buffer_hours * 3600)
 
     def _refresh_access_token(self) -> Optional[str]:
         if not self._refresh_token:
@@ -286,8 +301,20 @@ class UpstoxClient:
         FIX 1: Check token expiry using stored expiry time or midnight IST rules.
         FIX 2: Always re-read from DB when in-memory token is absent (handles server restarts).
         FIX 3: Attempt refresh when refresh token is available.
+        FIX 4: Proactively refresh if token expiring within 2 hours to avoid gap.
         """
         if self._access_token:
+            if self._is_token_expiring_soon(buffer_hours=2):
+                logger.warning(
+                    "[TOKEN] Token expiring within 2 hours. "
+                    "Attempting proactive refresh."
+                )
+                refreshed = self._refresh_access_token()
+                if refreshed:
+                    return refreshed
+                self._clear_token()
+                return None
+            
             if not self._is_cached_token_valid():
                 logger.warning(
                     "[TOKEN] In-memory token is expired or invalid. "
@@ -316,6 +343,17 @@ class UpstoxClient:
                 return None
 
             expiry_at = self._expiry_from_token_row(tok)
+            
+            if expiry_at and self._token_expiring_soon_static(expiry_at, buffer_hours=2):
+                logger.warning(
+                    "[TOKEN] DB token expiring within 2 hours. "
+                    "Attempting proactive refresh."
+                )
+                refreshed = self._refresh_access_token()
+                if refreshed:
+                    return refreshed
+                return None
+            
             if expiry_at and datetime.utcnow() >= expiry_at:
                 logger.warning(
                     "[TOKEN] DB token has expired. "
@@ -799,9 +837,17 @@ class UpstoxClient:
                 logger.warning(f"[LIVE] LTP key not found in response: {d}")
                 return None
             elif resp.status_code == 401:
-                logger.error("[TOKEN] LTP call rejected (401). Clearing token cache.")
-                self._clear_token()
-                self._invalidate_db_token()
+                now_ist = datetime.now(_IST)
+                is_mkt = (now_ist.replace(hour=9,minute=0,second=0,microsecond=0)
+                          <= now_ist <=
+                          now_ist.replace(hour=15,minute=45,second=0,microsecond=0)
+                          and now_ist.weekday() < 5)
+                if is_mkt:
+                    logger.error("[TOKEN] LTP call rejected (401) during market hours. Clearing token.")
+                    self._clear_token()
+                    self._invalidate_db_token()
+                else:
+                    logger.warning("[TOKEN] LTP call rejected (401) outside market hours — keeping token.")
                 return None
             else:
                 logger.error(f"[LIVE] LTP fetch failed (HTTP {resp.status_code}): {resp.text}")
