@@ -48,15 +48,21 @@ def get_market_status_detail() -> dict:
 # Token expiry helper
 # Upstox tokens expire at MIDNIGHT IST every day — NOT 24h rolling.
 # ---------------------------------------------------------------------------
-def _token_expires_at_midnight_ist(authenticated_at: datetime) -> datetime:
-    """Returns the midnight IST cutoff after the day the token was issued."""
+def _token_expires_at_ist(authenticated_at: datetime) -> datetime:
+    """
+    Returns the token expiry time in UTC.
+    Upstox tokens actually expire around 3:30 AM IST the following day
+    (after overnight settlement), NOT at midnight.
+    Using 3:00 AM IST as a safe conservative cutoff.
+    """
     auth_ist = authenticated_at.replace(tzinfo=timezone.utc).astimezone(_IST)
-    midnight_ist = auth_ist.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
-    return midnight_ist.astimezone(timezone.utc).replace(tzinfo=None)  # back to naive UTC
+    # Expiry = 3:00 AM IST the next calendar day
+    expiry_ist = auth_ist.replace(hour=3, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    return expiry_ist.astimezone(timezone.utc).replace(tzinfo=None)  # back to naive UTC
 
 def _is_token_expired(last_auth: datetime) -> bool:
-    """True if the Upstox token has crossed its midnight-IST expiry."""
-    expiry_utc = _token_expires_at_midnight_ist(last_auth)
+    """True if the token has crossed its 3 AM IST expiry."""
+    expiry_utc = _token_expires_at_ist(last_auth)
     return datetime.utcnow() >= expiry_utc
 
 
@@ -235,8 +241,8 @@ class UpstoxClient:
     def ensure_authenticated(self) -> bool:
         """
         Load a valid token from DB and mark Upstox as live if available.
-        Also proactively validates the token with a lightweight LTP call
-        to catch silent disconnections before the trading tick fires.
+        Proactive LTP validation is only done during market hours (9:00-15:45 IST)
+        to avoid false 401s from Upstox's market-data endpoint during off-hours.
         """
         token = self.get_token()
         if token is None:
@@ -244,21 +250,33 @@ class UpstoxClient:
             self.websocket_status = "Disconnected"
             return False
 
-        # Proactive validation: hit LTP endpoint to confirm token is still accepted
-        url = f"{self.base_url}/market-quote/ltp"
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        params  = {"instrument_key": "NSE_INDEX|Nifty 50"}
-        try:
-            resp = requests.get(url, headers=headers, params=params, timeout=5)
-            if resp.status_code == 401:
-                logger.warning("[KEEPALIVE] Token rejected by Upstox (401) during keepalive check. Clearing.")
-                self._clear_token()
-                self._invalidate_db_token()
-                self.data_source = "DISCONNECTED"
-                self.websocket_status = "Disconnected"
-                return False
-        except Exception:
-            pass  # Network blip — don't clear token, will retry next cycle
+        # Only validate against live LTP during market hours
+        # Outside market hours the LTP endpoint can return 401 even for valid tokens
+        now_ist = datetime.now(_IST)
+        market_open  = now_ist.replace(hour=9,  minute=0,  second=0, microsecond=0)
+        market_close = now_ist.replace(hour=15, minute=45, second=0, microsecond=0)
+        is_market_hours = market_open <= now_ist <= market_close and now_ist.weekday() < 5
+
+        if is_market_hours:
+            url = f"{self.base_url}/market-quote/ltp"
+            headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+            params  = {"instrument_key": "NSE_INDEX|Nifty 50"}
+            try:
+                resp = requests.get(url, headers=headers, params=params, timeout=5)
+                if resp.status_code == 401:
+                    logger.warning(
+                        "[KEEPALIVE] Token rejected by Upstox (401) during market hours. "
+                        "Clearing token — re-authenticate via dashboard."
+                    )
+                    self._clear_token()
+                    self._invalidate_db_token()
+                    self.data_source = "DISCONNECTED"
+                    self.websocket_status = "Disconnected — re-authenticate"
+                    return False
+                logger.debug(f"[KEEPALIVE] LTP validation OK (status {resp.status_code})")
+            except Exception as e:
+                logger.warning(f"[KEEPALIVE] LTP validation network error: {e} — keeping token")
+                # Network blip — don't clear token
 
         self.data_source = "UPSTOX LIVE"
         self.websocket_status = "Connected"
@@ -495,9 +513,17 @@ class UpstoxClient:
             logger.info(f"[HISTORICAL] Got {len(one_min)} 1m candles for {trading_date}")
             return one_min
         elif resp.status_code == 401:
-            logger.error("[TOKEN] Historical candle fetch rejected (401). Clearing cache.")
-            self._clear_token()
-            self._invalidate_db_token()
+            now_ist = datetime.now(_IST)
+            is_mkt = (now_ist.replace(hour=9,minute=0,second=0,microsecond=0)
+                      <= now_ist <=
+                      now_ist.replace(hour=15,minute=45,second=0,microsecond=0)
+                      and now_ist.weekday() < 5)
+            if is_mkt:
+                logger.error("[TOKEN] Historical candle 401 during market hours — clearing token.")
+                self._clear_token()
+                self._invalidate_db_token()
+            else:
+                logger.warning("[TOKEN] Historical candle 401 outside market hours — keeping token.")
             return []
         elif resp.status_code == 429:
             import time
@@ -555,9 +581,18 @@ class UpstoxClient:
                 logger.warning(f"[HISTORICAL] No prior trading day OHLC returned for {target_date}.")
                 return None
             elif resp.status_code == 401:
-                logger.error("[TOKEN] Prev OHLC call rejected (401). Clearing token.")
-                self._clear_token()
-                self._invalidate_db_token()
+                # Same as above — don't clear on off-hours 401
+                now_ist = datetime.now(_IST)
+                is_mkt = (now_ist.replace(hour=9,minute=0,second=0,microsecond=0)
+                          <= now_ist <=
+                          now_ist.replace(hour=15,minute=45,second=0,microsecond=0)
+                          and now_ist.weekday() < 5)
+                if is_mkt:
+                    logger.error("[TOKEN] Prev OHLC 401 during market hours — clearing token.")
+                    self._clear_token()
+                    self._invalidate_db_token()
+                else:
+                    logger.warning("[TOKEN] Prev OHLC 401 outside market hours — keeping token.")
                 return None
             else:
                 logger.error(f"[HISTORICAL] Prev OHLC failed (HTTP {resp.status_code}): {resp.text}")
@@ -661,9 +696,17 @@ class UpstoxClient:
                 return None
 
             elif resp.status_code == 401:
-                logger.error("[TOKEN] Prev OHLC call rejected (401). Clearing token.")
-                self._clear_token()
-                self._invalidate_db_token()
+                now_ist = datetime.now(_IST)
+                is_mkt = (now_ist.replace(hour=9,minute=0,second=0,microsecond=0)
+                          <= now_ist <=
+                          now_ist.replace(hour=15,minute=45,second=0,microsecond=0)
+                          and now_ist.weekday() < 5)
+                if is_mkt:
+                    logger.error("[TOKEN] Prev OHLC 401 during market hours — clearing token.")
+                    self._clear_token()
+                    self._invalidate_db_token()
+                else:
+                    logger.warning("[TOKEN] Prev OHLC 401 outside market hours — keeping token.")
                 return None
             else:
                 logger.error(f"[LIVE] Prev OHLC failed (HTTP {resp.status_code}): {resp.text}")
