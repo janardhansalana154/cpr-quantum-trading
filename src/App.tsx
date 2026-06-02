@@ -246,21 +246,21 @@ export default function App() {
       const res = await fetch("/api/status");
       if (res.ok) {
         const data = await res.json();
-        setLiveStatus({
-          data_source: data.data_source || "DISCONNECTED",
-          last_live_candle_time: data.last_live_candle_time || null,
-          websocket_status: data.websocket_status || "Disconnected",
-          nifty_ltp: data.nifty_ltp ?? null,
-          cmp_source: data.cmp_source || "DISCONNECTED",
-          cmp_last_updated: data.cmp_last_updated || null,
-          cpr_levels: data.cpr_levels || null,
-          trading_mode: data.trading_mode || "paper",
-          market_status: data.market_status || "CLOSED",
-          market_open: data.market_open || false,
-          market_detail: data.market_detail || { weekday: "--", current_ist: "--", is_holiday: false },
-          daily_summary: data.daily_summary || null,
-          strategy_allowed: data.strategy_allowed || false,
-        });
+        setLiveStatus(prev => ({
+          data_source: data.data_source || prev.data_source,
+          last_live_candle_time: data.last_live_candle_time || prev.last_live_candle_time,
+          websocket_status: data.websocket_status || prev.websocket_status,
+          nifty_ltp: data.nifty_ltp != null ? data.nifty_ltp : prev.nifty_ltp,
+          cmp_source: data.cmp_source || prev.cmp_source,
+          cmp_last_updated: data.cmp_last_updated || prev.cmp_last_updated,
+          cpr_levels: data.cpr_levels || prev.cpr_levels,
+          trading_mode: data.trading_mode || prev.trading_mode,
+          market_status: data.market_status || prev.market_status,
+          market_open: data.market_open ?? prev.market_open,
+          market_detail: data.market_detail || prev.market_detail,
+          daily_summary: data.daily_summary || prev.daily_summary,
+          strategy_allowed: data.strategy_allowed ?? prev.strategy_allowed,
+        }));
         if (data.cpr_levels) setCprLevels(data.cpr_levels);
         if (data.trading_mode) setTradingMode(data.trading_mode);
       }

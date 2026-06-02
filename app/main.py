@@ -442,11 +442,17 @@ def get_system_status(db: Session = Depends(get_db)):
     daily = rm.get_or_create_daily_state()
     mkt = get_market_status_detail()
 
-    ltp = upstox.get_nifty_price()
-    cmp_source = "UPSTOX_LTP" if ltp is not None else "DISCONNECTED"
-    cmp_ts = datetime.utcnow().isoformat() if ltp is not None else None
-
     auth = upstox._is_authenticated()
+    if auth:
+        upstox.data_source = "UPSTOX LIVE"
+        upstox.websocket_status = "Connected"
+    else:
+        upstox.data_source = "DISCONNECTED"
+        upstox.websocket_status = "Disconnected"
+
+    cmp_source = "UPSTOX_LTP" if auth else "DISCONNECTED"
+    cmp_ts = datetime.utcnow().isoformat() if auth else None
+
     strategy_allowed = (
         mkt["market_open"]
         and auth
@@ -468,7 +474,7 @@ def get_system_status(db: Session = Depends(get_db)):
         "market_open": mkt["market_open"],
         "market_detail": mkt,
         "data_source": upstox.data_source,
-        "nifty_ltp": ltp,
+        "nifty_ltp": None,
         "cmp_source": cmp_source,
         "cmp_last_updated": cmp_ts,
         "last_live_candle_time": upstox.last_live_candle_time,
