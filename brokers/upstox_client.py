@@ -157,7 +157,9 @@ class UpstoxClient:
         self.base_url     = "https://api.upstox.com/v2"
 
         self._access_token: Optional[str] = None
-        self._token_loaded_at: Optional[datetime] = None
+        self._refresh_token: Optional[str] = None
+        self._token_loaded_at: Optional[datetime] = None   # when we last loaded/stored it
+        self._token_expires_at: Optional[datetime] = None
 
         self.last_live_candle_time: Optional[str] = None
         self.websocket_status: str = "Disconnected"
@@ -175,6 +177,8 @@ class UpstoxClient:
                 if s.get("api_secret"):
                     self.api_secret = s["api_secret"]
                     settings.UPSTOX_API_SECRET = s["api_secret"]
+                if s.get("refresh_token"):
+                    self._refresh_token = s["refresh_token"]
                 logger.info(f"Loaded Upstox credentials from {secrets_path}")
             except Exception as e:
                 logger.error(f"Failed to load credentials: {e}")
@@ -184,18 +188,114 @@ class UpstoxClient:
     # ------------------------------------------------------------------
     def _clear_token(self):
         self._access_token = None
+        self._refresh_token = None
         self._token_loaded_at = None
+        self._token_expires_at = None
         self.data_source = "DISCONNECTED"
         self.websocket_status = "Disconnected"
+
+    def _expiry_from_token_row(self, tok) -> Optional[datetime]:
+        if getattr(tok, "expiry_time", None):
+            return tok.expiry_time
+        last_auth = tok.last_authenticated_at or tok.created_at
+        return _token_expires_at_midnight_ist(last_auth) if last_auth else None
+
+    def _is_cached_token_valid(self) -> bool:
+        if not self._access_token:
+            return False
+        if self._token_expires_at and datetime.utcnow() >= self._token_expires_at:
+            return False
+        if self._token_loaded_at and _is_token_expired(self._token_loaded_at):
+            return False
+        return True
+
+    def _refresh_access_token(self) -> Optional[str]:
+        if not self._refresh_token:
+            return None
+
+        url = f"{self.base_url}/login/authorization/token"
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": self._refresh_token,
+            "client_id": self.api_key,
+            "client_secret": self.api_secret,
+        }
+        headers = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+
+        try:
+            resp = requests.post(url, data=data, headers=headers, timeout=10)
+            if resp.status_code != 200:
+                logger.warning(f"[TOKEN] Refresh failed (HTTP {resp.status_code}): {resp.text}")
+                return None
+
+            payload = resp.json()
+            token = payload.get("access_token")
+            if not token:
+                logger.error("[TOKEN] Refresh response missing access_token")
+                return None
+
+            refresh = payload.get("refresh_token")
+            expires_in = payload.get("expires_in")
+            now = datetime.utcnow()
+            expiry_at = now + timedelta(seconds=int(expires_in)) if expires_in else _token_expires_at_midnight_ist(now)
+
+            self._access_token = token
+            self._refresh_token = refresh or self._refresh_token
+            self._token_loaded_at = now
+            self._token_expires_at = expiry_at
+
+            from database.db import SessionLocal
+            from database.models import UpstoxToken
+            if SessionLocal:
+                db = SessionLocal()
+                try:
+                    tok = db.query(UpstoxToken).order_by(UpstoxToken.id.desc()).first()
+                    if tok:
+                        tok.access_token = token
+                        tok.expiry_time = expiry_at
+                        tok.last_authenticated_at = now
+                        tok.status = "Connected"
+                        db.commit()
+                except Exception as e:
+                    logger.error(f"[TOKEN] Failed to persist refreshed token: {e}")
+                finally:
+                    db.close()
+
+            if self._refresh_token and getattr(settings, "UPSTOX_SECRETS_PATH", None):
+                try:
+                    import json
+                    with open(settings.UPSTOX_SECRETS_PATH, "r+") as f:
+                        data = json.load(f)
+                        data["refresh_token"] = self._refresh_token
+                        f.seek(0)
+                        f.truncate()
+                        json.dump(data, f)
+                except Exception:
+                    pass
+
+            logger.info("[TOKEN] Access token refreshed successfully.")
+            return token
+        except Exception as e:
+            logger.error(f"[TOKEN] Refresh network error: {e}")
+            return None
 
     def get_token(self) -> Optional[str]:
         """
         Returns a valid access token, or None.
-        Checks midnight-IST expiry. Re-reads from DB on cache miss.
+
+        FIX 1: Check token expiry using stored expiry time or midnight IST rules.
+        FIX 2: Always re-read from DB when in-memory token is absent (handles server restarts).
+        FIX 3: Attempt refresh when refresh token is available.
         """
-        if self._access_token and self._token_loaded_at:
-            if _is_token_expired(self._token_loaded_at):
-                logger.warning("[TOKEN] In-memory token expired (past 3 AM IST). Clearing.")
+        if self._access_token:
+            if not self._is_cached_token_valid():
+                logger.warning(
+                    "[TOKEN] In-memory token is expired or invalid. "
+                    "Attempting refresh if available."
+                )
+                refreshed = self._refresh_access_token()
+                if refreshed:
+                    return refreshed
                 self._clear_token()
                 return None
             return self._access_token
@@ -215,12 +315,22 @@ class UpstoxClient:
             if last_auth is None:
                 return None
 
-            if _is_token_expired(last_auth):
-                logger.warning("[TOKEN] DB token expired (past 3 AM IST). Re-authenticate.")
+            expiry_at = self._expiry_from_token_row(tok)
+            if expiry_at and datetime.utcnow() >= expiry_at:
+                logger.warning(
+                    "[TOKEN] DB token has expired. "
+                    "Attempting refresh if refresh token is available."
+                )
+                refreshed = self._refresh_access_token()
+                if refreshed:
+                    return refreshed
                 return None
 
             self._access_token = tok.access_token
             self._token_loaded_at = last_auth
+            self._token_expires_at = expiry_at
+            self.data_source = "UPSTOX LIVE"
+            self.websocket_status = "Connected"
             logger.info("[TOKEN] Valid token loaded from DB.")
             return self._access_token
 
@@ -296,8 +406,9 @@ class UpstoxClient:
                         "last_authenticated": None, "token_preview": "None", **base}
 
             last_auth = tok.last_authenticated_at or tok.created_at
-            expired = _is_token_expired(last_auth)
-            expiry_utc = _token_expires_at_midnight_ist(last_auth)
+            expiry_utc = tok.expiry_time or _token_expires_at_midnight_ist(last_auth)
+            expired = datetime.utcnow() >= expiry_utc
+            # Convert to IST for display
             expiry_ist = expiry_utc.replace(tzinfo=timezone.utc).astimezone(_IST)
 
             if expired:
@@ -389,22 +500,28 @@ class UpstoxClient:
         try:
             resp = requests.post(url, data=data, headers=headers, timeout=10)
             if resp.status_code == 200:
-                token = resp.json().get("access_token")
+                payload = resp.json()
+                token = payload.get("access_token")
                 if not token:
                     logger.error("OAuth response missing access_token")
                     return False
 
+                refresh_token = payload.get("refresh_token")
+                expires_in = payload.get("expires_in")
+                now = datetime.utcnow()
+                expiry_at = (now + timedelta(seconds=int(expires_in))) if expires_in else _token_expires_at_midnight_ist(now)
+
+                # Persist to DB
                 from database.db import SessionLocal
                 from database.models import UpstoxToken
                 if SessionLocal:
                     db = SessionLocal()
                     try:
                         db.query(UpstoxToken).delete()
-                        now = datetime.utcnow()
                         db.add(UpstoxToken(
                             access_token=token,
                             status="Connected",
-                            expiry_time=_token_expires_at_midnight_ist(now),
+                            expiry_time=expiry_at,
                             last_authenticated_at=now,
                         ))
                         db.commit()
@@ -415,9 +532,24 @@ class UpstoxClient:
                         db.close()
 
                 self._access_token = token
-                self._token_loaded_at = datetime.utcnow()
+                self._refresh_token = refresh_token
+                self._token_loaded_at = now
+                self._token_expires_at = expiry_at
                 self.data_source = "UPSTOX LIVE"
                 self.websocket_status = "Connected"
+
+                if self._refresh_token and getattr(settings, "UPSTOX_SECRETS_PATH", None):
+                    try:
+                        import json
+                        with open(settings.UPSTOX_SECRETS_PATH, "r+") as f:
+                            data = json.load(f)
+                            data["refresh_token"] = self._refresh_token
+                            f.seek(0)
+                            f.truncate()
+                            json.dump(data, f)
+                    except Exception:
+                        pass
+
                 logger.info("[LIVE] Upstox authenticated successfully.")
                 return True
             else:
