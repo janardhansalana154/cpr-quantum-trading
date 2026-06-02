@@ -8,7 +8,7 @@ COPY . .
 RUN npm run build
 
 # Stage 2: Build the FastAPI backend and serve static frontend
-FROM python:3.11-slim
+FROM python:3.12-slim
 WORKDIR /app
 
 # Install system dependencies
