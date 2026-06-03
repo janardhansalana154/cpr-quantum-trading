@@ -369,7 +369,18 @@ def monitor_interval_tick(force_market_open: bool = False):
 
                 logger.info(f"[LIVE] {name} TRIGGERED | candle={latest_time} close={latest['close']}")
 
-                _now_ist = datetime.now(_IST)
+                if settings.MOCK_MODE and latest.get("time"):
+                    try:
+                        _now_ist = datetime.fromisoformat(latest["time"])
+                        if _now_ist.tzinfo is None:
+                            _now_ist = _now_ist.replace(tzinfo=_IST)
+                        else:
+                            _now_ist = _now_ist.astimezone(_IST)
+                    except Exception:
+                        _now_ist = datetime.now(_IST)
+                else:
+                    _now_ist = datetime.now(_IST)
+
                 _cutoff  = _now_ist.replace(
                     hour=settings.NO_ENTRY_AFTER_HOUR,
                     minute=settings.NO_ENTRY_AFTER_MIN,
