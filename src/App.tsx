@@ -1454,7 +1454,20 @@ export default function App() {
                       <p className="mt-1.5 text-[11px] text-slate-400 font-sans">Orders simulated. No real capital at risk.</p>
                     </div>
                   </div>
-                  <div className="text-[10px] text-slate-500 font-mono italic text-right mt-3">DB: SQLite Local</div>
+                  <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 items-center">
+                    <div className="text-[10px] text-slate-500 font-mono italic">DB: SQLite Local</div>
+                    <div className="flex justify-end items-center gap-2">
+                      <span className="text-[10px] text-slate-400 mr-2 font-mono">Trading Mode:</span>
+                      <button onClick={() => handleSetTradingMode('paper')}
+                        className={`text-xs px-3 py-1.5 rounded font-bold ${tradingMode === 'paper' ? 'bg-emerald-600 text-slate-900' : 'bg-slate-800 text-slate-300'}`}>
+                        Paper
+                      </button>
+                      <button onClick={() => handleSetTradingMode('live')}
+                        className={`text-xs px-3 py-1.5 rounded font-bold ${tradingMode === 'live' ? 'bg-rose-600 text-slate-900' : 'bg-slate-800 text-slate-300'}`}>
+                        Live
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
