@@ -292,7 +292,12 @@ export default function App() {
         addLog("ERROR", `Mock run failed: ${res.status} ${txt}`);
         return;
       }
-      addLog("SUCCESS", "Mock tick executed successfully.");
+      const data = await res.json();
+      if (data.trades_added && data.trades_added > 0) {
+        addLog("SUCCESS", `Mock tick executed. ${data.trades_added} new trade(s) added.`);
+      } else {
+        addLog("INFO", "Mock tick executed. No new signal or trade was generated this run.");
+      }
       fetchLiveStatus();
       fetchLiveTrades();
     } catch (e: any) {

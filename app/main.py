@@ -869,11 +869,37 @@ def run_mock_tick():
     """
     if not settings.MOCK_MODE:
         raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
+
+    from database.db import SessionLocal
+    from database.models import DailyState
+
+    today = date.today().strftime("%Y-%m-%d")
+    db = SessionLocal()
+    try:
+        before_state = db.query(DailyState).filter(DailyState.trade_date == today).first()
+        before_count = before_state.trade_count if before_state else 0
+    finally:
+        db.close()
+
     try:
         monitor_interval_tick()
-        return {"status": "success", "message": "Mock tick executed."}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    db = SessionLocal()
+    try:
+        after_state = db.query(DailyState).filter(DailyState.trade_date == today).first()
+        after_count = after_state.trade_count if after_state else 0
+    finally:
+        db.close()
+
+    return {
+        "status": "success",
+        "message": "Mock tick executed.",
+        "trade_count_before": before_count,
+        "trade_count_after": after_count,
+        "trades_added": max(0, after_count - before_count),
+    }
 
 
 @app.get("/health")
