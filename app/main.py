@@ -870,6 +870,11 @@ def run_mock_tick():
     if not settings.MOCK_MODE:
         raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
 
+    global _last_processed_candle_time
+    for m in setups.values():
+        m.reset_state(0, "Mock trigger reset")
+    _last_processed_candle_time = None
+
     from database.db import SessionLocal
     from database.models import DailyState
 

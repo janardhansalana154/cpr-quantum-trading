@@ -668,17 +668,13 @@ class UpstoxClient:
             return []
 
     def get_mock_nifty_ohlc_5m(self) -> List[Dict]:
+        # A deterministic mock candle sequence designed to trigger a valid Setup A entry
+        # on the synthetic CPR levels defined by get_mock_previous_day_ohlc().
         demo_bars = [
-            {"time": "2026-06-04T09:15:00+05:30", "open": 24050.0, "high": 24080.0, "low": 24040.0, "close": 24065.0, "volume": 100},
-            {"time": "2026-06-04T09:20:00+05:30", "open": 24065.0, "high": 24075.0, "low": 24050.0, "close": 24058.0, "volume": 110},
-            {"time": "2026-06-04T09:25:00+05:30", "open": 24058.0, "high": 24062.0, "low": 24020.0, "close": 24025.0, "volume": 90},
-            {"time": "2026-06-04T09:30:00+05:30", "open": 24025.0, "high": 24045.0, "low": 24018.0, "close": 24038.0, "volume": 130},
-            {"time": "2026-06-04T09:35:00+05:30", "open": 24038.0, "high": 24050.0, "low": 24030.0, "close": 24044.0, "volume": 120},
-            {"time": "2026-06-04T09:40:00+05:30", "open": 24044.0, "high": 24055.0, "low": 24038.0, "close": 24042.0, "volume": 105},
-            {"time": "2026-06-04T09:45:00+05:30", "open": 24042.0, "high": 24068.0, "low": 24040.0, "close": 24060.0, "volume": 125},
-            {"time": "2026-06-04T09:50:00+05:30", "open": 24060.0, "high": 24080.0, "low": 24055.0, "close": 24072.0, "volume": 140},
-            {"time": "2026-06-04T09:55:00+05:30", "open": 24072.0, "high": 24085.0, "low": 24068.0, "close": 24078.0, "volume": 115},
-            {"time": "2026-06-04T10:00:00+05:30", "open": 24078.0, "high": 24095.0, "low": 24074.0, "close": 24088.0, "volume": 150},
+            {"time": "2026-06-04T09:15:00+05:30", "open": 24080.0, "high": 24090.0, "low": 24078.0, "close": 24088.0, "volume": 120},
+            {"time": "2026-06-04T09:20:00+05:30", "open": 24088.0, "high": 24089.0, "low": 24077.0, "close": 24084.0, "volume": 110},
+            {"time": "2026-06-04T09:25:00+05:30", "open": 24084.0, "high": 24087.0, "low": 24080.0, "close": 24085.0, "volume": 100},
+            {"time": "2026-06-04T09:30:00+05:30", "open": 24085.0, "high": 24086.0, "low": 24079.0, "close": 24083.0, "volume": 105},
         ]
         return [dict(bar) for bar in demo_bars]
 
