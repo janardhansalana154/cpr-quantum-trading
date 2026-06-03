@@ -60,11 +60,11 @@ class SetupStateMachine:
       SL = entry candle's high + SL_BUFFER (shorts)
            entry candle's low  - SL_BUFFER (longs)
 
-    ── Change 3: Target = min/max(1:RR, CPR level) with 1:1 minimum ──
-      Setup A  short: TP = max(1:RR target, TC)   i.e. whichever is HIGHER (closer)
-      Setup B  long:  TP = min(1:RR target, BC)   i.e. whichever is LOWER  (closer)
-      Setup C  long:  TP = min(1:RR target, R1)   i.e. whichever is LOWER  (closer)
-      Setup D  short: TP = max(1:RR target, S1)   i.e. whichever is HIGHER (closer)
+    ── Change 3: Target = min(1:RR, CPR level) with 1:1 minimum for all setups ──
+      Setup A  short: TP = min(1:RR target, TC)   i.e. whichever is LOWER (deeper profit)
+      Setup B  long:  TP = min(1:RR target, BC)   i.e. whichever is LOWER (closer to entry)
+      Setup C  long:  TP = min(1:RR target, R1)   i.e. whichever is LOWER (closer to entry)
+      Setup D  short: TP = min(1:RR target, S1)   i.e. whichever is LOWER (deeper profit)
       Trade is SKIPPED if the resulting TP gives less than 1:1 RR.
 
     ── Retest invalidation ──
