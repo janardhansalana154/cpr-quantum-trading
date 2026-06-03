@@ -326,26 +326,22 @@ class SetupStateMachine:
 
         # ══════════════════════════════════════════════════════════
         # SETUP C — Long  TC → R1
-        # Break: lo < TC AND cl < TC   (price dips back below TC)
+        # Break: lo < TC AND cl < TC   (price closed below TC)
         #   wait — Setup C is a long that plays TC as support.
-        #   State 1: price was ABOVE TC (cl > TC) — that's the initial condition
-        #   State 2: price dips back (cl < TC) — recovered below TC
+        #   State 1: price broke below TC
+        #   State 2: price recovered above TC
         #   Retest: lo touches TC (± tol) AND cl > TC — bounces off TC as support
         #   Entry: hi > r_high of retest candle
-        #   SL: entry candle lo - SL_BUFFER
+        #   SL: retest candle low - SL_BUFFER
         #   TP: min(1:RR, R1)
         # ══════════════════════════════════════════════════════════
         elif self.name == "SETUP_C":
 
             if self.state == 0:
-                # Break = candle both pierces AND closes above TC
-                if lo < levels.tc and cl > levels.tc:
-                    # This is actually a bullish candle that bounced off TC —
-                    # but for consistency with Change 1, hi > TC AND cl > TC
-                    pass
-                if hi > levels.tc and cl > levels.tc:
+                # Change 1: both lo AND cl must be below TC for a valid breakout
+                if lo < levels.tc and cl < levels.tc:
                     self.state = 1; self.state_bar = idx
-                    logger.info(f"SETUP_C: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > TC={levels.tc}")
+                    logger.info(f"SETUP_C: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < TC={levels.tc}")
 
             elif self.state == 1:
                 if self.bars_elapsed(idx) <= self.fail_win:
@@ -381,7 +377,7 @@ class SetupStateMachine:
             elif self.state == 4:
                 if self.bars_elapsed(idx) <= self.ent_win:
                     if hi > self.c_high:
-                        _sl    = lo - settings.SL_BUFFER
+                        _sl    = self.r_low - settings.SL_BUFFER
                         _entry = cl
                         _tp    = self._calc_target(_entry, _sl, levels.r1, "long")
                         if _tp is not None and not is_inside_cpr(cl, levels):
@@ -406,23 +402,22 @@ class SetupStateMachine:
 
         # ══════════════════════════════════════════════════════════
         # SETUP D — Short  BC → S1
-        # Break: hi > BC AND cl < BC   ← price pierces up through BC but closes BELOW
-        #   Actually: lo < BC AND cl < BC (broke below BC)
-        #   Wait — Setup D is a short from BC down to S1.
-        #   State 1: price broke BELOW BC (lo < BC AND cl < BC)
-        #   State 2: price recovered above BC (cl > BC)
+        # Break: hi > BC AND cl > BC   (price closed above BC)
+        #   wait — Setup D is a short that plays BC as resistance.
+        #   State 1: price broke above BC
+        #   State 2: price recovered below BC
         #   Retest: hi touches BC (± tol) AND cl < BC — rejected at BC
         #   Entry: lo < r_low of retest candle
-        #   SL: entry candle hi + SL_BUFFER
+        #   SL: retest candle high + SL_BUFFER
         #   TP: max(1:RR, S1)
         # ══════════════════════════════════════════════════════════
         elif self.name == "SETUP_D":
 
             if self.state == 0:
-                # Change 1: both lo AND cl must be below BC
-                if lo < levels.bc and cl < levels.bc:
+                # Change 1: both hi AND cl must be above BC for a valid breakout
+                if hi > levels.bc and cl > levels.bc:
                     self.state = 1; self.state_bar = idx
-                    logger.info(f"SETUP_D: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < BC={levels.bc}")
+                    logger.info(f"SETUP_D: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > BC={levels.bc}")
 
             elif self.state == 1:
                 if self.bars_elapsed(idx) <= self.fail_win:
