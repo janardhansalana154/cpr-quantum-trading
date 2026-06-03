@@ -208,6 +208,8 @@ class SetupStateMachine:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
                         logger.info(f"SETUP_A: bar {idx} STATE3 RETESTED. hi={hi} ≈ R1={levels.r1} r_low={lo}")
+                    else:
+                        self.state_bar = idx
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -289,6 +291,8 @@ class SetupStateMachine:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
                         logger.info(f"SETUP_B: bar {idx} STATE3 RETESTED. lo={lo} ≈ S1={levels.s1} r_high={hi}")
+                    else:
+                        self.state_bar = idx
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -371,6 +375,8 @@ class SetupStateMachine:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
                         logger.info(f"SETUP_C: bar {idx} STATE3 RETESTED. lo={lo} ≈ TC={levels.tc} r_high={hi}")
+                    else:
+                        self.state_bar = idx
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -453,6 +459,8 @@ class SetupStateMachine:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
                         logger.info(f"SETUP_D: bar {idx} STATE3 RETESTED. hi={hi} ≈ BC={levels.bc} r_low={lo}")
+                    else:
+                        self.state_bar = idx
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
