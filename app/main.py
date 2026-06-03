@@ -1,5 +1,6 @@
 import os
 import logging
+import requests
 from datetime import datetime, date, timezone, timedelta
 from typing import Optional, List, Dict, Any
 
@@ -134,6 +135,16 @@ def startup_event():
         coalesce=True,
     )
 
+    if settings.KEEPALIVE_URL:
+        scheduler.add_job(
+            keepalive_ping,
+            "interval",
+            seconds=settings.KEEPALIVE_INTERVAL_SECONDS,
+            id="keepalive_ping_job",
+            max_instances=1,
+            coalesce=True,
+        )
+
     # Also reset CPR cache at midnight UTC so new day levels are fetched fresh
     scheduler.add_job(
         reset_daily_cpr_cache,
@@ -147,6 +158,8 @@ def startup_event():
 
     scheduler.start()
     keep_upstox_alive()
+    if settings.KEEPALIVE_URL:
+        logger.info(f"[STARTUP] Keepalive ping enabled: {settings.KEEPALIVE_URL} every {settings.KEEPALIVE_INTERVAL_SECONDS}s")
     logger.info(
         "[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + "
         "10m keepalive + 8:55AM IST daily token refresh."
@@ -193,6 +206,16 @@ def keep_upstox_alive():
         logger.debug(f"[UPSTOX] Keepalive success — Nifty LTP {ltp}.")
     else:
         logger.debug("[UPSTOX] Keepalive probe complete — token still valid.")
+
+
+def keepalive_ping():
+    if not settings.KEEPALIVE_URL:
+        return
+    try:
+        resp = requests.get(settings.KEEPALIVE_URL, timeout=10)
+        logger.info(f"[KEEPALIVE] Pinged {settings.KEEPALIVE_URL} -> {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[KEEPALIVE] Failed to ping {settings.KEEPALIVE_URL}: {e}")
 
 
 # ------------------------------------------------------------------
@@ -515,6 +538,16 @@ def get_system_status(db: Session = Depends(get_db)):
             "loss_limit": settings.DAILY_LOSS_LIMIT,
             "lots": settings.POSITION_LOTS,
         },
+    }
+
+
+@app.get("/health")
+def health_check():
+    return {
+        "status": "ok",
+        "timestamp": datetime.utcnow().isoformat(),
+        "upstox_authenticated": upstox._is_authenticated() if upstox else False,
+        "keepalive_url": settings.KEEPALIVE_URL,
     }
 
 

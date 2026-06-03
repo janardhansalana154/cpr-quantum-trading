@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     TELEGRAM_BOT_TOKEN: str = Field(default="", description="Telegram Bot Token")
     TELEGRAM_CHAT_ID: str = Field(default="", description="Telegram Chat ID or User ID")
     
+    # Keepalive / uptime monitor
+    KEEPALIVE_URL: str = Field(default="", description="Optional public URL to ping to keep the app alive or integrate with uptime monitors")
+    KEEPALIVE_INTERVAL_SECONDS: int = Field(default=300, ge=60, description="Interval in seconds to ping KEEPALIVE_URL when configured")
+
     # Bot runtime parameters
     TRADING_MODE: Literal["paper", "live"] = Field(default="paper", description="Trading mode ('paper' or 'live')")
     DATABASE_URL: str = Field(default="sqlite:///./cpr_trading.db", description="Database connection string")

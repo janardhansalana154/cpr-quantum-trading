@@ -86,6 +86,8 @@ Integrated seamlessly with **Upstox API v2** for weekly ATM option trading, pers
    ```
 
 > Note: If you deploy on a free-tier host such as Render free plan, the container may still be put to sleep after a period of inactivity. That means the dashboard tab can close without affecting the running service in theory, but the host may still stop the app after idle time. Use an always-on instance or paid plan for guaranteed continuous operation.
+>
+> This repository now supports an optional keepalive ping target. Set `KEEPALIVE_URL` in `.env` or Render environment variables to a public health check URL (for example, `https://uptimerobot.com/` or your own deployed ping endpoint). The app will automatically ping that URL every `KEEPALIVE_INTERVAL_SECONDS` seconds when configured.
 
 ---
 
