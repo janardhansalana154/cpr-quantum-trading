@@ -457,8 +457,17 @@ def get_system_status(db: Session = Depends(get_db)):
         upstox.data_source = "DISCONNECTED"
         upstox.websocket_status = "Disconnected"
 
-    cmp_source = "UPSTOX_LTP" if auth else "DISCONNECTED"
-    cmp_ts = datetime.utcnow().isoformat() if auth else None
+    nifty_ltp = None
+    cmp_source = "DISCONNECTED"
+    cmp_ts = None
+    if auth:
+        nifty_ltp = upstox.get_nifty_price()
+        if nifty_ltp is not None:
+            cmp_source = "UPSTOX_LTP"
+            cmp_ts = datetime.utcnow().isoformat()
+        else:
+            cmp_source = "DISCONNECTED"
+            cmp_ts = None
 
     strategy_allowed = (
         mkt["market_open"]
@@ -481,7 +490,7 @@ def get_system_status(db: Session = Depends(get_db)):
         "market_open": mkt["market_open"],
         "market_detail": mkt,
         "data_source": upstox.data_source,
-        "nifty_ltp": None,
+        "nifty_ltp": nifty_ltp,
         "cmp_source": cmp_source,
         "cmp_last_updated": cmp_ts,
         "last_live_candle_time": upstox.last_live_candle_time,
@@ -694,6 +703,7 @@ def health():
 def upstox_session_status(request: Request):
     if upstox is None:
         return {"connected": False, "token_status": "Starting", "expiry_status": "Server initialising"}
+    upstox.ensure_authenticated()
     status = upstox.get_connection_status()
     status["calculated_redirect_uri"] = _resolve_redirect_uri(request)
     status["upstox_api_key"] = settings.UPSTOX_API_KEY
