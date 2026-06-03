@@ -396,10 +396,10 @@ class SetupStateMachine:
                     self._set_reason("Waiting for a valid breakout below TC.")
 
             elif self.state == 1:
-                if cl < levels.tc:
+                if cl > levels.tc:
                     self.state = 2; self.state_bar = idx
                     self._set_reason("Recovered inside after TC breakout. Waiting for retest near TC.")
-                    logger.info(f"SETUP_C: bar {idx} STATE2 RECOVERED. cl={cl} < TC={levels.tc}")
+                    logger.info(f"SETUP_C: bar {idx} STATE2 RECOVERED. cl={cl} > TC={levels.tc}")
                 else:
                     self._set_reason("Breakout open: still below TC, waiting for recovery.")
 

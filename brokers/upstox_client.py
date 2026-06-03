@@ -668,13 +668,13 @@ class UpstoxClient:
             return []
 
     def get_mock_nifty_ohlc_5m(self) -> List[Dict]:
-        # A deterministic mock candle sequence designed to trigger a valid Setup A entry
-        # on the synthetic CPR levels defined by get_mock_previous_day_ohlc().
+        # A deterministic mock candle sequence designed to trigger a valid Setup C entry
+        # using the mock previous-day CPR levels.
         demo_bars = [
-            {"time": "2026-06-04T09:15:00+05:30", "open": 24080.0, "high": 24090.0, "low": 24078.0, "close": 24088.0, "volume": 120},
-            {"time": "2026-06-04T09:20:00+05:30", "open": 24088.0, "high": 24089.0, "low": 24077.0, "close": 24084.0, "volume": 110},
-            {"time": "2026-06-04T09:25:00+05:30", "open": 24084.0, "high": 24087.0, "low": 24080.0, "close": 24085.0, "volume": 100},
-            {"time": "2026-06-04T09:30:00+05:30", "open": 24085.0, "high": 24086.0, "low": 24079.0, "close": 24083.0, "volume": 105},
+            {"time": "2026-06-04T09:15:00+05:30", "open": 24055.0, "high": 24058.0, "low": 24048.0, "close": 24054.0, "volume": 120},
+            {"time": "2026-06-04T09:20:00+05:30", "open": 24054.0, "high": 24058.0, "low": 24052.0, "close": 24057.0, "volume": 110},
+            {"time": "2026-06-04T09:25:00+05:30", "open": 24057.0, "high": 24060.0, "low": 24053.0, "close": 24059.0, "volume": 100},
+            {"time": "2026-06-04T09:30:00+05:30", "open": 24059.0, "high": 24061.0, "low": 24055.0, "close": 24061.0, "volume": 105},
         ]
         return [dict(bar) for bar in demo_bars]
 

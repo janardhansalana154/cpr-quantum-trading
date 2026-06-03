@@ -293,13 +293,16 @@ def check_active_position_targets():
 _last_processed_candle_time: Optional[str] = None
 
 
-def monitor_interval_tick():
+def monitor_interval_tick(force_market_open: bool = False):
     global _last_processed_candle_time
 
     if upstox is None:
         return
 
     mkt = get_market_status_detail()
+    if force_market_open:
+        mkt["market_open"] = True
+        mkt["market_status"] = "OPEN"
     logger.info(
         f"[MARKET_OPEN={mkt['market_open']}] Tick at {mkt['current_ist']} "
         f"({mkt['weekday']}, holiday={mkt['is_holiday']})"
@@ -887,7 +890,7 @@ def run_mock_tick():
         db.close()
 
     try:
-        monitor_interval_tick()
+        monitor_interval_tick(force_market_open=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
