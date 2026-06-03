@@ -1,5 +1,5 @@
 import logging
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import declarative_base, sessionmaker
 from config.settings import settings
 
@@ -8,6 +8,25 @@ logger = logging.getLogger("CPR_System.Database")
 Base = declarative_base()
 engine = None
 SessionLocal = None
+
+def _ensure_upstox_refresh_column(engine):
+    inspector = inspect(engine)
+    if "upstox_tokens" not in inspector.get_table_names():
+        return
+    existing_cols = [col["name"] for col in inspector.get_columns("upstox_tokens")]
+    if "refresh_token" in existing_cols:
+        return
+
+    try:
+        with engine.begin() as conn:
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE upstox_tokens ADD COLUMN IF NOT EXISTS refresh_token VARCHAR(500)"))
+            else:
+                conn.execute(text("ALTER TABLE upstox_tokens ADD COLUMN refresh_token VARCHAR(500)"))
+        logger.info("Database migration: added refresh_token column to upstox_tokens.")
+    except Exception as ex:
+        logger.error(f"Failed to add refresh_token column to upstox_tokens: {ex}")
+
 
 def init_db():
     global engine, SessionLocal
@@ -33,6 +52,7 @@ def init_db():
     try:
         from database.models import Trade, DailyState, StrategyState, UpstoxToken
         Base.metadata.create_all(bind=engine)
+        _ensure_upstox_refresh_column(engine)
         logger.info("Database schemas validated and tables created successfully.")
     except Exception as ex:
         logger.error(f"Error during database table creation: {ex}")

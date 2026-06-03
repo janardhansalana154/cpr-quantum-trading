@@ -267,6 +267,7 @@ class UpstoxClient:
                     tok = db.query(UpstoxToken).order_by(UpstoxToken.id.desc()).first()
                     if tok:
                         tok.access_token = token
+                        tok.refresh_token = self._refresh_token
                         tok.expiry_time = expiry_at
                         tok.last_authenticated_at = now
                         tok.status = "Connected"
@@ -365,6 +366,7 @@ class UpstoxClient:
                 return None
 
             self._access_token = tok.access_token
+            self._refresh_token = tok.refresh_token or self._refresh_token
             self._token_loaded_at = last_auth
             self._token_expires_at = expiry_at
             self.data_source = "UPSTOX LIVE"
@@ -558,6 +560,7 @@ class UpstoxClient:
                         db.query(UpstoxToken).delete()
                         db.add(UpstoxToken(
                             access_token=token,
+                            refresh_token=refresh_token,
                             status="Connected",
                             expiry_time=expiry_at,
                             last_authenticated_at=now,

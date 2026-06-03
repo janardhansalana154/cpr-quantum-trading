@@ -51,6 +51,7 @@ class UpstoxToken(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     access_token = Column(String(500), nullable=True)
+    refresh_token = Column(String(500), nullable=True)
     status = Column(String(55), default="Disconnected")  # Connected, Disconnected, Expired
     expiry_time = Column(DateTime, nullable=True)
     last_authenticated_at = Column(DateTime, nullable=True)

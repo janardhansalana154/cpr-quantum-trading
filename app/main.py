@@ -83,6 +83,11 @@ def startup_event():
     upstox = UpstoxClient()
     logger.info("[STARTUP] Database initialised. UpstoxClient created.")
 
+    if upstox._is_authenticated():
+        logger.info("[STARTUP] Upstox token restored and authenticated.")
+    else:
+        logger.warning("[STARTUP] No valid Upstox session available on startup.")
+
     scheduler = BackgroundScheduler()
 
     # Strategy tick — every 5 minutes
@@ -141,6 +146,7 @@ def startup_event():
     )
 
     scheduler.start()
+    keep_upstox_alive()
     logger.info(
         "[STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + "
         "10m keepalive + 8:55AM IST daily token refresh."

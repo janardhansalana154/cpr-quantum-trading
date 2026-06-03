@@ -85,6 +85,8 @@ Integrated seamlessly with **Upstox API v2** for weekly ATM option trading, pers
    docker run -d --name cpr-bot-instance -p 3000:3000 --env-file .env cpr-trading-bot
    ```
 
+> Note: If you deploy on a free-tier host such as Render free plan, the container may still be put to sleep after a period of inactivity. That means the dashboard tab can close without affecting the running service in theory, but the host may still stop the app after idle time. Use an always-on instance or paid plan for guaranteed continuous operation.
+
 ---
 
 ## 📜 Strategy Rules Summary
