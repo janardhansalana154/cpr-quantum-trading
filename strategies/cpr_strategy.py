@@ -124,8 +124,8 @@ class SetupStateMachine:
         direction="short":
           1:RR target = entry - (REWARD_RATIO * risk)
           CPR anchor  = TC  (price is heading DOWN toward TC)
-          Final TP    = max(rr_target, cpr_level)   ← whichever is HIGHER
-                        i.e. whichever is CLOSER to entry (more conservative)
+          Final TP    = min(rr_target, cpr_level)   ← whichever is LOWER
+                        i.e. target is 1:RR or the level, whichever gives deeper profit.
           Minimum 1:1 check: TP must be <= entry - risk
 
         direction="long":
@@ -142,7 +142,7 @@ class SetupStateMachine:
         if direction == "short":
             rr_tp  = entry - (settings.REWARD_RATIO * risk)
             cpr_target = cpr_level + settings.TARGET_BUFFER
-            final_tp = max(rr_tp, cpr_target)   # closer to entry = higher price
+            final_tp = min(rr_tp, cpr_target)   # target is 1:RR or the level, whichever is lower
             # 1:1 check — TP must be at least 1× risk away from entry
             if final_tp >= entry - risk:
                 logger.info(
@@ -180,7 +180,7 @@ class SetupStateMachine:
         # Retest: hi touches R1 (± tol) AND cl < R1
         # Entry: next candle's lo < r_low  →  enter short
         # SL: entry candle hi + SL_BUFFER
-        # TP: max(1:RR, TC)
+        # TP: min(1:RR, TC)
         # ══════════════════════════════════════════════════════════
         if self.name == "SETUP_A":
 
@@ -433,7 +433,7 @@ class SetupStateMachine:
         #   Retest: hi touches BC (± tol) AND cl < BC — rejected at BC
         #   Entry: lo < r_low of retest candle
         #   SL: retest candle high + SL_BUFFER
-        #   TP: max(1:RR, S1)
+        #   TP: min(1:RR, S1)
         # ══════════════════════════════════════════════════════════
         elif self.name == "SETUP_D":
 
