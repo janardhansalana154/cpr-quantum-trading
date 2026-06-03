@@ -213,7 +213,13 @@ class SetupStateMachine:
 
             elif self.state == 3:
                 if self.bars_elapsed(idx) <= self.con_win:
-                    if lo < self.r_low:
+                    if (levels.r1 - self.ret_tol) <= hi <= (levels.r1 + self.ret_tol) and cl < levels.r1:
+                        self.state_bar = idx
+                        self.r_high = hi; self.r_low = lo
+                        logger.info(
+                            f"SETUP_A: bar {idx} STATE3 RETEST UPDATED. hi={hi} ≈ R1={levels.r1} r_low={lo}"
+                        )
+                    elif lo < self.r_low:
                         self.state = 4
                         self.state_bar = idx
                         self.c_low = lo
@@ -288,7 +294,13 @@ class SetupStateMachine:
 
             elif self.state == 3:
                 if self.bars_elapsed(idx) <= self.con_win:
-                    if hi > self.r_high:
+                    if (levels.s1 - self.ret_tol) <= lo <= (levels.s1 + self.ret_tol) and cl > levels.s1:
+                        self.state_bar = idx
+                        self.r_high = hi; self.r_low = lo
+                        logger.info(
+                            f"SETUP_B: bar {idx} STATE3 RETEST UPDATED. lo={lo} ≈ S1={levels.s1} r_high={hi}"
+                        )
+                    elif hi > self.r_high:
                         self.state = 4
                         self.state_bar = idx
                         self.c_high = hi
@@ -364,7 +376,13 @@ class SetupStateMachine:
 
             elif self.state == 3:
                 if self.bars_elapsed(idx) <= self.con_win:
-                    if hi > self.r_high:
+                    if (levels.tc - self.ret_tol) <= lo <= (levels.tc + self.ret_tol) and cl > levels.tc:
+                        self.state_bar = idx
+                        self.r_high = hi; self.r_low = lo
+                        logger.info(
+                            f"SETUP_C: bar {idx} STATE3 RETEST UPDATED. lo={lo} ≈ TC={levels.tc} r_high={hi}"
+                        )
+                    elif hi > self.r_high:
                         self.state = 4
                         self.state_bar = idx
                         self.c_high = hi
@@ -440,7 +458,13 @@ class SetupStateMachine:
 
             elif self.state == 3:
                 if self.bars_elapsed(idx) <= self.con_win:
-                    if lo < self.r_low:
+                    if (levels.bc - self.ret_tol) <= hi <= (levels.bc + self.ret_tol) and cl < levels.bc:
+                        self.state_bar = idx
+                        self.r_high = hi; self.r_low = lo
+                        logger.info(
+                            f"SETUP_D: bar {idx} STATE3 RETEST UPDATED. hi={hi} ≈ BC={levels.bc} r_low={lo}"
+                        )
+                    elif lo < self.r_low:
                         self.state = 4
                         self.state_bar = idx
                         self.c_low = lo
