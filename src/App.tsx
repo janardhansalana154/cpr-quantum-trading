@@ -331,6 +331,8 @@ export default function App() {
 
   const [inputApiKey, setInputApiKey] = useState("");
   const [inputApiSecret, setInputApiSecret] = useState("");
+  const [telegramToken, setTelegramToken] = useState("");
+  const [telegramChatId, setTelegramChatId] = useState("");
   const [isSavingCreds, setIsSavingCreds] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -1509,6 +1511,52 @@ export default function App() {
                       </div>
                     </div>
                   </div>
+                </div>
+              </div>
+
+              {/* Telegram Settings */}
+              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 mt-6">
+                <div className="flex items-center gap-2 border-b border-slate-800 pb-3 mb-4">
+                  <Bell className="h-4 w-4 text-amber-400" />
+                  <h3 className="text-xs font-mono tracking-widest text-slate-300 uppercase font-bold">Telegram Notifications</h3>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block">Bot Token:</label>
+                    <input type="text" placeholder="bot_token (123:ABC...)"
+                      value={telegramToken} onChange={e => setTelegramToken(e.target.value)}
+                      className="w-full text-indigo-300 font-mono text-xs bg-slate-950 border border-slate-800 px-2.5 py-1.5 rounded" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] text-slate-400 font-mono block">Chat ID:</label>
+                    <input type="text" placeholder="chat id or user id"
+                      value={telegramChatId} onChange={e => setTelegramChatId(e.target.value)}
+                      className="w-full text-indigo-300 font-mono text-xs bg-slate-950 border border-slate-800 px-2.5 py-1.5 rounded" />
+                  </div>
+                </div>
+                <div className="flex gap-2 justify-end mt-3">
+                  <button onClick={async () => {
+                    setIsSavingCreds(true);
+                    try {
+                      const res = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ telegram_bot_token: telegramToken, telegram_chat_id: telegramChatId }) });
+                      if (!res.ok) {
+                        const t = await res.text();
+                        addLog('ERROR', `Telegram save failed: ${t}`);
+                      } else {
+                        addLog('SUCCESS', 'Telegram credentials saved.');
+                      }
+                    } catch (e:any) { addLog('ERROR', `Network error: ${e?.message || e}`); }
+                    setIsSavingCreds(false);
+                  }} className="text-xs bg-emerald-600 hover:bg-emerald-500 text-slate-900 px-3 py-1.5 rounded font-bold">Save</button>
+
+                  <button onClick={async () => {
+                    try {
+                      const res = await fetch('/api/telegram/test', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: 'Test alert from dashboard' }) });
+                      if (!res.ok) {
+                        const t = await res.text(); addLog('ERROR', `Test alert failed: ${t}`);
+                      } else { addLog('SUCCESS', 'Test alert sent (check Telegram).'); }
+                    } catch (e:any) { addLog('ERROR', `Network error: ${e?.message || e}`); }
+                  }} className="text-xs bg-amber-600 hover:bg-amber-500 text-slate-900 px-3 py-1.5 rounded font-bold">Send Test Alert</button>
                 </div>
               </div>
             </div>

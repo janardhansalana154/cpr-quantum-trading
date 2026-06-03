@@ -17,6 +17,7 @@ from brokers.upstox_client import UpstoxClient, is_market_open, get_market_statu
 from risk.manager import RiskManager
 from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupStateMachine, CPRLevels
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
+from telegram.bot import send_telegram_message
 
 from reports.historical_report import generate_historical_report
 from reports.backtest_engine import run_backtest
@@ -739,6 +740,19 @@ def upstox_callback(request: Request, code: str, db: Session = Depends(get_db)):
     raise HTTPException(status_code=400, detail="Authentication failed")
 
 
+@app.post("/api/telegram/test")
+def telegram_test_alert(message: Dict[str, str] = None):
+    """Send a test Telegram alert using current runtime settings."""
+    msg = (message or {}).get("message") or "Test alert from CPR system"
+    try:
+        ok = send_telegram_message(msg)
+        if ok:
+            return {"status": "success", "message": "Telegram test sent."}
+        raise HTTPException(status_code=500, detail="Telegram API call failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/api/config")
 def update_config(data: dict, db: Session = Depends(get_db)):
     global _today_cpr_levels, _cpr_date
@@ -783,25 +797,24 @@ def update_config(data: dict, db: Session = Depends(get_db)):
             sp = getattr(settings, "UPSTOX_SECRETS_PATH", None) or os.path.abspath(
                 os.path.join(os.path.dirname(os.path.dirname(__file__)), "upstox_secrets.json")
             )
-            try:
-                with open(sp, "r+") as f:
-                    import json
-                    try:
-                        file_data = json.load(f)
-                    except Exception:
-                        file_data = {}
-                    if "telegram_bot_token" in data:
-                        v = str(data["telegram_bot_token"]).strip()
-                        settings.TELEGRAM_BOT_TOKEN = v
-                        file_data["telegram_bot_token"] = v
-                    if "telegram_chat_id" in data:
-                        v = str(data["telegram_chat_id"]).strip()
-                        settings.TELEGRAM_CHAT_ID = v
-                        file_data["telegram_chat_id"] = v
-                    f.seek(0)
-                    f.truncate()
-                    json.dump(file_data, f)
-                logger.info("Telegram credentials persisted to secrets file.")
+            with open(sp, "r+") as f:
+                import json
+                try:
+                    file_data = json.load(f)
+                except Exception:
+                    file_data = {}
+                if "telegram_bot_token" in data:
+                    v = str(data["telegram_bot_token"]).strip()
+                    settings.TELEGRAM_BOT_TOKEN = v
+                    file_data["telegram_bot_token"] = v
+                if "telegram_chat_id" in data:
+                    v = str(data["telegram_chat_id"]).strip()
+                    settings.TELEGRAM_CHAT_ID = v
+                    file_data["telegram_chat_id"] = v
+                f.seek(0)
+                f.truncate()
+                json.dump(file_data, f)
+            logger.info("Telegram credentials persisted to secrets file.")
         except Exception:
             # Best-effort: at minimum update runtime settings
             if "telegram_bot_token" in data:

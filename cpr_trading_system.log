@@ -31,3 +31,7 @@
 2026-05-30 15:37:59,633 [INFO] apscheduler.executors.default: Running job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:38:29 IST)" (scheduled at 2026-05-30 15:37:59.627779+05:30)
 2026-05-30 15:37:59,634 [INFO] CPR_System.Main: MARKET_OPEN=False — skipping active position target checks until market reopens.
 2026-05-30 15:37:59,634 [INFO] apscheduler.executors.default: Job "check_active_position_targets (trigger: interval[0:00:30], next run at: 2026-05-30 15:38:29 IST)" executed successfully
+2026-06-03 10:17:21,209 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-06-03 10:17:21,464 [INFO] CPR_System.Database: Database migration: added refresh_token column to upstox_tokens.
+2026-06-03 10:17:21,464 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-06-03 10:17:21,466 [INFO] httpx: HTTP Request: POST http://testserver/api/assistant "HTTP/1.1 200 OK"
