@@ -777,6 +777,38 @@ def update_config(data: dict, db: Session = Depends(get_db)):
         except Exception as e:
             raise HTTPException(500, f"Credential write error: {e}")
 
+    # Accept Telegram credentials from dashboard and persist alongside other secrets
+    if "telegram_bot_token" in data or "telegram_chat_id" in data:
+        try:
+            sp = getattr(settings, "UPSTOX_SECRETS_PATH", None) or os.path.abspath(
+                os.path.join(os.path.dirname(os.path.dirname(__file__)), "upstox_secrets.json")
+            )
+            try:
+                with open(sp, "r+") as f:
+                    import json
+                    try:
+                        file_data = json.load(f)
+                    except Exception:
+                        file_data = {}
+                    if "telegram_bot_token" in data:
+                        v = str(data["telegram_bot_token"]).strip()
+                        settings.TELEGRAM_BOT_TOKEN = v
+                        file_data["telegram_bot_token"] = v
+                    if "telegram_chat_id" in data:
+                        v = str(data["telegram_chat_id"]).strip()
+                        settings.TELEGRAM_CHAT_ID = v
+                        file_data["telegram_chat_id"] = v
+                    f.seek(0)
+                    f.truncate()
+                    json.dump(file_data, f)
+                logger.info("Telegram credentials persisted to secrets file.")
+        except Exception:
+            # Best-effort: at minimum update runtime settings
+            if "telegram_bot_token" in data:
+                settings.TELEGRAM_BOT_TOKEN = str(data["telegram_bot_token"]).strip()
+            if "telegram_chat_id" in data:
+                settings.TELEGRAM_CHAT_ID = str(data["telegram_chat_id"]).strip()
+
     for key, attr in [("failure_window","FAILURE_WINDOW"),("retest_window","RETEST_WINDOW"),
                       ("confirmation_window","CONFIRMATION_WINDOW"),("entry_trigger_window","ENTRY_TRIGGER_WINDOW")]:
         if key in data:
