@@ -6,6 +6,7 @@ from typing import Optional, List, Dict, Any
 
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -517,6 +518,105 @@ def get_system_status(db: Session = Depends(get_db)):
             "lots": settings.POSITION_LOTS,
         },
     }
+
+
+class AssistantQuery(BaseModel):
+    question: str
+
+
+def _assistant_find_setup_states(setups: Dict[str, Any]) -> Dict[str, Any]:
+    armed = [name for name, data in setups.items() if data["state"] == 4]
+    retested = [name for name, data in setups.items() if data["state"] == 3]
+    recovered = [name for name, data in setups.items() if data["state"] == 2]
+    broken = [name for name, data in setups.items() if data["state"] == 1]
+    return {"armed": armed, "retested": retested, "recovered": recovered, "broken": broken}
+
+
+def _assistant_summary(status: Dict[str, Any], setups: Dict[str, Any]) -> str:
+    lines = [
+        f"Market is {'OPEN' if status['market_open'] else 'CLOSED'}.",
+        f"Data source: {status['data_source']}.",
+        f"Strategy allowed: {'YES' if status['strategy_allowed'] else 'NO'}.",
+        f"Trades today: {status['daily_summary']['trade_count']}/{settings.MAX_DAILY_TRADES}.",
+    ]
+    if status['cpr_levels']:
+        cpr = status['cpr_levels']
+        lines.append(f"Current CPR: R1={cpr['r1']}, TC={cpr['tc']}, BC={cpr['bc']}, S1={cpr['s1']}.")
+    state_info = _assistant_find_setup_states(setups)
+    if state_info['armed']:
+        lines.append(f"Armed setup(s): {', '.join(state_info['armed'])}.")
+    elif state_info['retested']:
+        lines.append(f"Retested but waiting for confirmation: {', '.join(state_info['retested'])}.")
+    elif state_info['recovered']:
+        lines.append(f"Recovered setups awaiting retest: {', '.join(state_info['recovered'])}.")
+    elif state_info['broken']:
+        lines.append(f"Breakouts detected but not yet retested: {', '.join(state_info['broken'])}.")
+    return " ".join(lines)
+
+
+def _assistant_answer_question(question: str, status: Dict[str, Any], setups: Dict[str, Any]) -> str:
+    q = question.strip().lower()
+    state_info = _assistant_find_setup_states(setups)
+    if "why" in q and ("enter" in q or "entry" in q or "trade" in q):
+        if not status['market_open']:
+            return "No entry can occur while the market is closed. Wait until NSE opens at 09:15 IST and the engine will resume if Upstox remains authenticated."
+        if status['data_source'] == 'DISCONNECTED':
+            return "Upstox is disconnected, so the strategy cannot receive live candles or trigger any orders. Reconnect Upstox before trading can continue."
+        if not status['strategy_allowed']:
+            if status['daily_summary']['trade_count'] >= settings.MAX_DAILY_TRADES:
+                return f"The system has already reached the daily trade limit ({status['daily_summary']['trade_count']}/{settings.MAX_DAILY_TRADES}), so no further entries are allowed today."
+            if status['daily_summary']['is_blocked']:
+                return "Trading is blocked for the day by risk control. Restore the daily state to resume strategy execution."
+        if state_info['armed']:
+            armed = ", ".join(state_info['armed'])
+            return f"A trade is ready in {armed}. The system is waiting for a confirmation candle that triggers the entry price."
+        if state_info['retested']:
+            return f"The strategy has retested one or more levels: {', '.join(state_info['retested'])}. It is waiting for the next confirmation move to complete the setup."
+        if state_info['recovered']:
+            return f"A breakout has recovered inside the CPR and is waiting for a valid retest. Active recovered setups: {', '.join(state_info['recovered'])}."
+        if state_info['broken']:
+            return f"The system has at least one valid breakout, but it has not yet completed the recovery and retest sequence. Breakout setup(s): {', '.join(state_info['broken'])}."
+        return _assistant_summary(status, setups)
+
+    if "upstox" in q or "token" in q or "connected" in q:
+        if status['data_source'] == 'DISCONNECTED':
+            return "Upstox is currently disconnected. Authenticate again to restore live data and trading capability."
+        expiry = upstox.token_expiry if hasattr(upstox, 'token_expiry') else status.get('cmp_last_updated')
+        return f"Upstox is connected. Data source is live, and token expiry info is available in the dashboard. Last CMP update: {status.get('cmp_last_updated') or 'unknown'}."
+
+    if "max trade" in q or "trade limit" in q or "daily trade" in q:
+        return f"Daily max trades is {settings.MAX_DAILY_TRADES}. Today {status['daily_summary']['trade_count']} trades have been taken. When the limit is reached, the engine stops taking new entries."
+
+    if "cpr" in q or "levels" in q or "r1" in q or "tc" in q or "bc" in q or "s1" in q:
+        if status['cpr_levels']:
+            cpr = status['cpr_levels']
+            return f"Current CPR levels are R1={cpr['r1']}, TC={cpr['tc']}, BC={cpr['bc']}, S1={cpr['s1']}."
+        return "CPR levels are not available right now because previous-day OHLC data is not loaded. Authenticate Upstox or wait for the next tick."
+
+    for setup_key in ['setup_a', 'setup_b', 'setup_c', 'setup_d']:
+        if setup_key in q:
+            key = setup_key.upper()
+            if key in setups:
+                s = setups[key]
+                return f"{key} is currently in state {s['state']} with reason: {s['last_reason']}."
+
+    if "help" in q or "rule" in q or "how" in q:
+        return _assistant_summary(status, setups)
+
+    return _assistant_summary(status, setups)
+
+
+@app.post("/api/assistant")
+def assistant_endpoint(request: AssistantQuery, db: Session = Depends(get_db)):
+    question = request.question.strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="Question is required.")
+    if upstox is None:
+        return {"question": question, "answer": "Server is still starting. Try again in a few seconds."}
+    status = get_system_status(db)
+    setups_state = get_active_setups()
+    answer = _assistant_answer_question(question, status, setups_state)
+    return {"question": question, "answer": answer}
 
 
 @app.get("/health")

@@ -34,6 +34,11 @@ interface SetupState {
   lastReason: string;
 }
 
+interface AssistantMessage {
+  role: "user" | "assistant";
+  text: string;
+}
+
 interface Candle {
   time: string;
   open: number;
@@ -360,6 +365,32 @@ export default function App() {
     }
   };
 
+  const handleAskAssistant = async () => {
+    const trimmed = assistantQuestion.trim();
+    if (!trimmed) return;
+    setAssistantLoading(true);
+    setAssistantMessages(prev => [...prev, { role: "user", text: trimmed }]);
+    try {
+      const response = await fetch("/api/assistant", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ question: trimmed }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        const errorText = data.detail || "Assistant request failed.";
+        setAssistantMessages(prev => [...prev, { role: "assistant", text: `Error: ${errorText}` }]);
+      } else {
+        setAssistantMessages(prev => [...prev, { role: "assistant", text: data.answer }]);
+      }
+    } catch (e: any) {
+      setAssistantMessages(prev => [...prev, { role: "assistant", text: `Network error: ${e?.message || "unknown"}` }]);
+    } finally {
+      setAssistantLoading(false);
+      setAssistantQuestion("");
+    }
+  };
+
   const stopAuthPopupMonitor = () => {
     if (authStatusPollRef.current !== null) {
       window.clearInterval(authStatusPollRef.current);
@@ -521,6 +552,12 @@ export default function App() {
     { timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "CPR Quantum Dashboard initializing..." },
     { timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "Polling backend for live market status..." },
   ]);
+
+  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([
+    { role: "assistant", text: "Ask me about the live trading system, current setup logic, or why a trade is not entering." }
+  ]);
+  const [assistantQuestion, setAssistantQuestion] = useState("");
+  const [assistantLoading, setAssistantLoading] = useState(false);
 
   const [setupStates, setSetupStates] = useState<Record<string, SetupState>>({
     "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
@@ -1443,6 +1480,43 @@ export default function App() {
                 <div>
                   <h4 className="text-emerald-400 font-bold uppercase tracking-wider font-mono">Demo Player (Cockpit tab)</h4>
                   <p className="mt-1 text-slate-400">The chart player in the Cockpit tab uses hardcoded sample candles for illustration only. It is clearly labeled DEMO ONLY and has no connection to the live backend engine.</p>
+                </div>
+              </div>
+
+              <div className="bg-slate-950/70 border border-slate-800 rounded-2xl p-5 mt-4">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h4 className="text-sm font-bold text-white">Ask the System</h4>
+                    <p className="text-[11px] text-slate-500 mt-1">Ask a question and get an answer based on live status, CPR setup states, and trading rules.</p>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">AI Assistant</span>
+                </div>
+                <div className="space-y-3 max-h-[280px] overflow-y-auto rounded-xl border border-slate-800 bg-slate-900/90 p-3">
+                  {assistantMessages.map((message, idx) => (
+                    <div key={idx} className={`rounded-xl p-3 ${message.role === "assistant" ? "bg-slate-800 text-slate-200" : "bg-slate-950 text-slate-100/90"}`}>
+                      <div className="flex items-center justify-between gap-2 mb-2 text-[10px] uppercase tracking-wider font-mono text-slate-500">
+                        <span>{message.role === "assistant" ? "Assistant" : "You"}</span>
+                        <span>{message.role === "assistant" ? "System" : "Question"}</span>
+                      </div>
+                      <div className="text-[12px] leading-relaxed whitespace-pre-wrap">{message.text}</div>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-4 grid gap-3">
+                  <textarea
+                    rows={3}
+                    value={assistantQuestion}
+                    onChange={e => setAssistantQuestion(e.target.value)}
+                    placeholder="e.g. Why isn’t a trade entering?"
+                    className="w-full resize-none rounded-xl border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-200 placeholder:text-slate-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <button
+                    onClick={handleAskAssistant}
+                    disabled={assistantLoading || !assistantQuestion.trim()}
+                    className="w-full rounded-xl bg-emerald-500 px-4 py-3 text-sm font-bold uppercase tracking-wider text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700"
+                  >
+                    {assistantLoading ? "Thinking..." : "Ask the Assistant"}
+                  </button>
                 </div>
               </div>
             </div>
