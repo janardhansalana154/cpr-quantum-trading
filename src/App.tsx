@@ -293,10 +293,14 @@ export default function App() {
         return;
       }
       const data = await res.json();
+      const barIndex = data.processed_mock_bar_index && data.mock_total_bars
+        ? ` [bar ${data.processed_mock_bar_index}/${data.mock_total_bars}]`
+        : "";
       if (data.trades_added && data.trades_added > 0) {
-        addLog("SUCCESS", `Mock tick executed. ${data.trades_added} new trade(s) added.`);
+        addLog("SUCCESS", `Mock tick executed.${barIndex} ${data.trades_added} new trade(s) added.`);
       } else {
-        addLog("INFO", "Mock tick executed. No new signal or trade was generated this run.");
+        const advanced = data.mock_advanced ? "Next bar loaded." : "No additional mock bar available.";
+        addLog("INFO", `Mock tick executed.${barIndex} No new signal or trade was generated this run. ${advanced}`);
       }
       fetchLiveStatus();
       fetchLiveTrades();

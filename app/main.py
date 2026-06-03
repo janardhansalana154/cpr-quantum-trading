@@ -873,11 +873,6 @@ def run_mock_tick():
     if not settings.MOCK_MODE:
         raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
 
-    global _last_processed_candle_time
-    for m in setups.values():
-        m.reset_state(0, "Mock trigger reset")
-    _last_processed_candle_time = None
-
     from database.db import SessionLocal
     from database.models import DailyState
 
@@ -889,10 +884,16 @@ def run_mock_tick():
     finally:
         db.close()
 
+    processed_bar_index = getattr(upstox, "_mock_bar_index", 1)
     try:
         monitor_interval_tick(force_market_open=True)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    if getattr(upstox, "advance_mock_bar", None):
+        has_advanced = upstox.advance_mock_bar()
+    else:
+        has_advanced = False
 
     db = SessionLocal()
     try:
@@ -907,6 +908,10 @@ def run_mock_tick():
         "trade_count_before": before_count,
         "trade_count_after": after_count,
         "trades_added": max(0, after_count - before_count),
+        "processed_mock_bar_index": processed_bar_index,
+        "mock_bar_index": getattr(upstox, "_mock_bar_index", None),
+        "mock_total_bars": len(getattr(upstox, "_mock_sequence", [])),
+        "mock_advanced": has_advanced,
     }
 
 

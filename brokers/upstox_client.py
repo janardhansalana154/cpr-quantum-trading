@@ -165,6 +165,9 @@ class UpstoxClient:
         self.websocket_status: str = "Disconnected"
         self.data_source: str = "DISCONNECTED"
 
+        self._mock_sequence = self._build_mock_sequence()
+        self._mock_bar_index = 1
+
         # Load saved API credentials
         secrets_path = getattr(settings, "UPSTOX_SECRETS_PATH", None)
         if secrets_path and os.path.exists(secrets_path):
@@ -667,21 +670,38 @@ class UpstoxClient:
             self.data_source = "DISCONNECTED"
             return []
 
-    def get_mock_nifty_ohlc_5m(self) -> List[Dict]:
-        # A deterministic mock candle sequence designed to trigger a valid Setup C entry
-        # using the mock previous-day CPR levels.
-        demo_bars = [
+    def _build_mock_sequence(self) -> List[Dict]:
+        return [
             {"time": "2026-06-04T09:15:00+05:30", "open": 24055.0, "high": 24058.0, "low": 24048.0, "close": 24054.0, "volume": 120},
             {"time": "2026-06-04T09:20:00+05:30", "open": 24054.0, "high": 24058.0, "low": 24052.0, "close": 24057.0, "volume": 110},
             {"time": "2026-06-04T09:25:00+05:30", "open": 24057.0, "high": 24060.0, "low": 24053.0, "close": 24059.0, "volume": 100},
             {"time": "2026-06-04T09:30:00+05:30", "open": 24059.0, "high": 24061.0, "low": 24055.0, "close": 24061.0, "volume": 105},
+            {"time": "2026-06-04T09:35:00+05:30", "open": 24061.0, "high": 24063.0, "low": 24057.0, "close": 24062.0, "volume": 110},
         ]
-        return [dict(bar) for bar in demo_bars]
+
+    def get_mock_nifty_ohlc_5m(self) -> List[Dict]:
+        self.data_source = "SIMULATION"
+        self.websocket_status = "Connected"
+        visible_bars = self._mock_sequence[: max(1, min(self._mock_bar_index, len(self._mock_sequence)))]
+        if visible_bars:
+            self.last_live_candle_time = visible_bars[-1]["time"]
+        return [dict(bar) for bar in visible_bars]
+
+    def advance_mock_bar(self) -> bool:
+        if self._mock_bar_index < len(self._mock_sequence):
+            self._mock_bar_index += 1
+            logger.info(f"[MOCK] Advanced to bar {self._mock_bar_index}/{len(self._mock_sequence)}")
+            return True
+        logger.info("[MOCK] No further mock bars to advance.")
+        return False
 
     def get_mock_previous_day_ohlc(self) -> Optional[Dict]:
         return {"high": 24095.0, "low": 24018.0, "close": 24044.0}
 
     def get_mock_nifty_price(self) -> float:
+        if self._mock_sequence and self._mock_bar_index > 0:
+            index = min(self._mock_bar_index, len(self._mock_sequence)) - 1
+            return self._mock_sequence[index]["close"]
         return 24088.0
 
     def get_mock_option_ltp(self, option_symbol: str) -> float:
