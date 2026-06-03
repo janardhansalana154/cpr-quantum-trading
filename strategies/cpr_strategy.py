@@ -191,13 +191,10 @@ class SetupStateMachine:
                     logger.info(f"SETUP_A: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > R1={levels.r1}")
 
             elif self.state == 1:
-                if self.bars_elapsed(idx) <= self.fail_win:
-                    if cl < levels.r1:
-                        self.state = 2; self.state_bar = idx
-                        logger.info(f"SETUP_A: bar {idx} STATE2 RECOVERED. cl={cl} < R1={levels.r1}")
-                    # still above R1 — stay in state 1
-                else:
-                    self.reset_state(idx, "Failure window elapsed")
+                if cl < levels.r1:
+                    self.state = 2; self.state_bar = idx
+                    logger.info(f"SETUP_A: bar {idx} STATE2 RECOVERED. cl={cl} < R1={levels.r1}")
+                # still above R1 — stay in state 1
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
@@ -276,12 +273,9 @@ class SetupStateMachine:
                     logger.info(f"SETUP_B: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < S1={levels.s1}")
 
             elif self.state == 1:
-                if self.bars_elapsed(idx) <= self.fail_win:
-                    if cl > levels.s1:
-                        self.state = 2; self.state_bar = idx
-                        logger.info(f"SETUP_B: bar {idx} STATE2 RECOVERED. cl={cl} > S1={levels.s1}")
-                else:
-                    self.reset_state(idx, "Failure window elapsed")
+                if cl > levels.s1:
+                    self.state = 2; self.state_bar = idx
+                    logger.info(f"SETUP_B: bar {idx} STATE2 RECOVERED. cl={cl} > S1={levels.s1}")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
@@ -360,12 +354,9 @@ class SetupStateMachine:
                     logger.info(f"SETUP_C: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < TC={levels.tc}")
 
             elif self.state == 1:
-                if self.bars_elapsed(idx) <= self.fail_win:
-                    if cl < levels.tc:
-                        self.state = 2; self.state_bar = idx
-                        logger.info(f"SETUP_C: bar {idx} STATE2 RECOVERED. cl={cl} < TC={levels.tc}")
-                else:
-                    self.reset_state(idx, "Failure window elapsed")
+                if cl < levels.tc:
+                    self.state = 2; self.state_bar = idx
+                    logger.info(f"SETUP_C: bar {idx} STATE2 RECOVERED. cl={cl} < TC={levels.tc}")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
@@ -444,12 +435,9 @@ class SetupStateMachine:
                     logger.info(f"SETUP_D: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > BC={levels.bc}")
 
             elif self.state == 1:
-                if self.bars_elapsed(idx) <= self.fail_win:
-                    if cl > levels.bc:
-                        self.state = 2; self.state_bar = idx
-                        logger.info(f"SETUP_D: bar {idx} STATE2 RECOVERED. cl={cl} > BC={levels.bc}")
-                else:
-                    self.reset_state(idx, "Recovery window elapsed")
+                if cl > levels.bc:
+                    self.state = 2; self.state_bar = idx
+                    logger.info(f"SETUP_D: bar {idx} STATE2 RECOVERED. cl={cl} > BC={levels.bc}")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:

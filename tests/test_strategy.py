@@ -48,34 +48,40 @@ def test_setup_a_state_machine_flow():
     triggered, details = machine.update(c0, 0, levels)
     assert machine.state == 1
     assert triggered is False
-    
-    # Step 2: Candle 3 (within 10 candles) closes BELOW R1 (close = 19585)
-    c3 = {"open": 19605.0, "high": 19615.0, "low": 19580.0, "close": 19585.0}
-    triggered, details = machine.update(c3, 3, levels)
+
+    # Confirm no timeout on breakout-to-recover: Candle 20 remains broken
+    c20 = {"open": 19615.0, "high": 19625.0, "low": 19605.0, "close": 19610.0}
+    triggered, details = machine.update(c20, 20, levels)
+    assert machine.state == 1
+    assert triggered is False
+
+    # Candle 21 recovers, and the setup should still move to recovered state
+    c21 = {"open": 19605.0, "high": 19610.0, "low": 19590.0, "close": 19585.0}
+    triggered, details = machine.update(c21, 21, levels)
     assert machine.state == 2
     assert triggered is False
-    
-    # Step 3: Candle 6 (within 10 candles) retests R1-R2 range.
+
+    # Step 3: Candle 24 (within 10 candles) retests R1-R2 range.
     # High is 19602.0 (High lies in [19595, 19605]), Close is below R1 (19590.0)
-    c6 = {"open": 19580.0, "high": 19602.0, "low": 19575.0, "close": 19590.0}
-    triggered, details = machine.update(c6, 6, levels)
+    c24 = {"open": 19580.0, "high": 19602.0, "low": 19575.0, "close": 19590.0}
+    triggered, details = machine.update(c24, 24, levels)
     assert machine.state == 3
     assert machine.r_low == 19575.0
     assert triggered is False
-    
-    # Step 4: Candle 9 (within 10) confirmation breaks. Close below Retest Low (19575.0) -> close is 19570
-    c9 = {"open": 19589.0, "high": 19592.0, "low": 19565.0, "close": 19570.0}
-    triggered, details = machine.update(c9, 9, levels)
+
+    # Step 4: Candle 27 (within 10) confirmation breaks. Close below Retest Low (19575.0) -> close is 19570
+    c27 = {"open": 19589.0, "high": 19592.0, "low": 19565.0, "close": 19570.0}
+    triggered, details = machine.update(c27, 27, levels)
     assert machine.state == 4
     assert machine.c_low == 19565.0
     assert triggered is False
-    
-    # Step 5: Candle 12 (within 10) entry trigger breaks Confirmation Low (19565.0) -> low is 19560
+
+    # Step 5: Candle 30 (within 10) entry trigger breaks Confirmation Low (19565.0) -> low is 19560
     # Close of entry candle must be > TC (19500.0) -> close is 19555
-    c12 = {"open": 19568.0, "high": 19570.0, "low": 19560.0, "close": 19562.0}
-    triggered, details = machine.update(c12, 12, levels)
+    c30 = {"open": 19568.0, "high": 19570.0, "low": 19560.0, "close": 19562.0}
+    triggered, details = machine.update(c30, 30, levels)
     assert triggered is True
     assert details["setup_name"] == "SETUP_A"
     assert details["trade_type"] == "SELL"
     assert details["stop_loss"] == 19602.0 + 3.0 # Retest High (19602.0) + SL Buffer (3)
-    assert details["take_profit"] == 19500.0 + 3.0 # TC (19500.0) + target buffer (3)
+    assert details["take_profit"] == 19476.0 # min(1:RR target, TC) = 19476.0
