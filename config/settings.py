@@ -17,6 +17,7 @@ class Settings(BaseSettings):
 
     # Bot runtime parameters
     TRADING_MODE: Literal["paper", "live"] = Field(default="paper", description="Trading mode ('paper' or 'live')")
+    MOCK_MODE: bool = Field(default=False, description="Enable dashboard-driven mock trading mode with simulated candles and paper order execution")
     DATABASE_URL: str = Field(default="sqlite:///./cpr_trading.db", description="Database connection string")
     LOG_LEVEL: str = Field(default="INFO", description="Global log level")
     
@@ -84,6 +85,7 @@ except Exception as e:
         TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
         TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
         TRADING_MODE = os.environ.get("TRADING_MODE", "paper")
+        MOCK_MODE = os.environ.get("MOCK_MODE", "false").lower() in ("1","true","yes")
         DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///./cpr_trading.db")
         LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
         FAILURE_WINDOW = int(os.environ.get("FAILURE_WINDOW", 10))

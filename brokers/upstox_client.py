@@ -1,7 +1,7 @@
 import requests
 import logging
 from typing import Dict, List, Optional, Tuple, Literal
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, time, timedelta, timezone
 from urllib.parse import quote
 from config.settings import settings
 
@@ -604,6 +604,11 @@ class UpstoxClient:
     # Live data methods
     # ------------------------------------------------------------------
     def get_nifty_ohlc_5m(self) -> List[Dict]:
+        if settings.MOCK_MODE:
+            self.data_source = "SIMULATION"
+            self.websocket_status = "Connected"
+            return self.get_mock_nifty_ohlc_5m()
+
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — no candles fetched.")
             self.data_source = "DISCONNECTED"
@@ -661,6 +666,38 @@ class UpstoxClient:
             logger.error(f"[LIVE] Network error fetching candles: {e}")
             self.data_source = "DISCONNECTED"
             return []
+
+    def get_mock_nifty_ohlc_5m(self) -> List[Dict]:
+        demo_bars = [
+            {"time": "2026-06-04T09:15:00+05:30", "open": 24050.0, "high": 24080.0, "low": 24040.0, "close": 24065.0, "volume": 100},
+            {"time": "2026-06-04T09:20:00+05:30", "open": 24065.0, "high": 24075.0, "low": 24050.0, "close": 24058.0, "volume": 110},
+            {"time": "2026-06-04T09:25:00+05:30", "open": 24058.0, "high": 24062.0, "low": 24020.0, "close": 24025.0, "volume": 90},
+            {"time": "2026-06-04T09:30:00+05:30", "open": 24025.0, "high": 24045.0, "low": 24018.0, "close": 24038.0, "volume": 130},
+            {"time": "2026-06-04T09:35:00+05:30", "open": 24038.0, "high": 24050.0, "low": 24030.0, "close": 24044.0, "volume": 120},
+            {"time": "2026-06-04T09:40:00+05:30", "open": 24044.0, "high": 24055.0, "low": 24038.0, "close": 24042.0, "volume": 105},
+            {"time": "2026-06-04T09:45:00+05:30", "open": 24042.0, "high": 24068.0, "low": 24040.0, "close": 24060.0, "volume": 125},
+            {"time": "2026-06-04T09:50:00+05:30", "open": 24060.0, "high": 24080.0, "low": 24055.0, "close": 24072.0, "volume": 140},
+            {"time": "2026-06-04T09:55:00+05:30", "open": 24072.0, "high": 24085.0, "low": 24068.0, "close": 24078.0, "volume": 115},
+            {"time": "2026-06-04T10:00:00+05:30", "open": 24078.0, "high": 24095.0, "low": 24074.0, "close": 24088.0, "volume": 150},
+        ]
+        return [dict(bar) for bar in demo_bars]
+
+    def get_mock_previous_day_ohlc(self) -> Optional[Dict]:
+        return {"high": 24095.0, "low": 24018.0, "close": 24044.0}
+
+    def get_mock_nifty_price(self) -> float:
+        return 24088.0
+
+    def get_mock_option_ltp(self, option_symbol: str) -> float:
+        strike = 120.0
+        try:
+            import re
+            match = re.search(r"(\d+)(?:CE|PE)$", option_symbol)
+            if match:
+                strike = float(match.group(1))
+        except Exception:
+            pass
+        return round(110.0 + ((strike - 24000.0) / 500.0) * 2.0, 2)
 
     def _aggregate_to_5min(self, one_min_candles: List[Dict]) -> List[Dict]:
         from collections import defaultdict
@@ -817,6 +854,9 @@ class UpstoxClient:
             return None
 
     def get_nifty_price(self) -> Optional[float]:
+        if settings.MOCK_MODE:
+            return self.get_mock_nifty_price()
+
         if not self._is_authenticated():
             logger.debug("[CMP_SOURCE=DISCONNECTED] Not authenticated — LTP skipped.")
             return None
@@ -860,6 +900,9 @@ class UpstoxClient:
             return None
 
     def get_previous_day_ohlc(self) -> Optional[Dict]:
+        if settings.MOCK_MODE:
+            return self.get_mock_previous_day_ohlc()
+
         if not self._is_authenticated():
             logger.warning("[DATA_SOURCE=DISCONNECTED] Not authenticated — prev OHLC skipped.")
             return None
@@ -938,14 +981,78 @@ class UpstoxClient:
         expiry = self._get_nearest_weekly_expiry_str()
         return f"NIFTY{expiry}{int(strike)}{opt_type}", float(strike), opt_type
 
+    def get_option_ltp(self, option_symbol: str) -> Optional[float]:
+        if settings.MOCK_MODE:
+            return self.get_mock_option_ltp(option_symbol)
+
+        token = self.get_token()
+        if not token:
+            return None
+
+        url = f"{self.base_url}/market-quote/ltp"
+        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+        params = {"instrument_key": f"NSE_FO|{option_symbol}"}
+
+        try:
+            resp = requests.get(url, headers=headers, params=params, timeout=8)
+            if resp.status_code == 200:
+                data = resp.json().get("data", {})
+                option_data = (data.get(f"NSE_FO:{option_symbol}")
+                               or data.get(f"NSE_FO|{option_symbol}")
+                               or next(iter(data.values()), {}))
+                ltp = option_data.get("last_price") or option_data.get("ltp")
+                if ltp is not None:
+                    return float(ltp)
+                logger.warning(f"Option LTP missing for {option_symbol}: {data}")
+                return None
+
+            if resp.status_code == 401:
+                self._clear_token()
+                self._invalidate_db_token()
+                return None
+
+            logger.error(f"Option LTP request failed for {option_symbol} (HTTP {resp.status_code}): {resp.text}")
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching option LTP for {option_symbol}: {e}")
+            return None
+
+    def _get_nearest_weekly_expiry_str(self) -> str:
+        expiry = self._get_nearest_weekly_expiry_date()
+        return expiry.strftime("%y%b%d").upper()
+
+    def _get_nearest_weekly_expiry_date(self, now_ist: Optional[datetime] = None) -> date:
+        now_ist = now_ist or datetime.now(_IST)
+        today = now_ist.date()
+        weekday = today.weekday()  # Monday=0, Tuesday=1, ..., Thursday=3, Friday=4
+
+        if weekday <= 3:
+            days_ahead = 3 - weekday
+        else:
+            days_ahead = 10 - weekday
+
+        expiry = today + timedelta(days=days_ahead)
+        if weekday == 3 and now_ist.time() >= time(15, 30):
+            expiry += timedelta(days=7)
+
+        while expiry.weekday() not in (3, 4) or expiry.strftime("%Y-%m-%d") in _NSE_HOLIDAYS:
+            expiry += timedelta(days=1)
+
+        return expiry
+
     def place_order(self, option_symbol: str, action: Literal["BUY", "SELL"], lots: int, paper: bool = True) -> Dict:
         qty = lots * settings.NIFTY_LOT_SIZE
+        if settings.MOCK_MODE:
+            paper = True
         if paper:
             logger.info(f"[PAPER ORDER] {action} {qty} units of {option_symbol}")
+            avg_price = self.get_option_ltp(option_symbol)
+            if avg_price is None:
+                avg_price = 120.50
             return {
                 "status": "success",
                 "order_id": f"PAPER-{int(datetime.utcnow().timestamp())}",
-                "avg_price": 120.50,
+                "avg_price": round(avg_price, 2),
                 "message": "Paper order processed",
             }
 
@@ -996,6 +1103,3 @@ class UpstoxClient:
         except Exception as e:
             logger.error(f"Error fetching order price: {e}")
         return 0.0
-
-    def _get_nearest_weekly_expiry_str(self) -> str:
-        return datetime.today().strftime("%y%b%d").upper()

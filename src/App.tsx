@@ -138,6 +138,7 @@ const MAX_TRADES_PER_DAY = 2;  // mirrors backend settings.MAX_DAILY_TRADES
 
 export default function App() {
   const [tradingMode, setTradingMode] = useState<"paper" | "live">("paper");
+  const [mockMode, setMockMode] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speedMs, setSpeedMs] = useState(1500);
   const [currentIdx, setCurrentIdx] = useState(0);
@@ -247,6 +248,58 @@ export default function App() {
     }
   };
 
+  const updateBackendConfig = async (payload: Record<string, unknown>) => {
+    try {
+      const response = await fetch("/api/config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        const error = await response.text();
+        addLog("ERROR", `Config update failed: ${error}`);
+        return false;
+      }
+      fetchLiveStatus();
+      return true;
+    } catch (e: any) {
+      addLog("ERROR", `Config update error: ${e?.message || e}`);
+      return false;
+    }
+  };
+
+  const handleSetTradingMode = async (target: "paper" | "live") => {
+    const success = await updateBackendConfig({ trading_mode: target });
+    if (success) {
+      setTradingMode(target);
+      addLog("INFO", `Trading mode set to ${target.toUpperCase()}.`);
+    }
+  };
+
+  const handleToggleMockMode = async () => {
+    const success = await updateBackendConfig({ mock_mode: !mockMode });
+    if (success) {
+      setMockMode(prev => !prev);
+      addLog("INFO", `Mock mode ${mockMode ? "disabled" : "enabled"}.`);
+    }
+  };
+
+  const handleRunMockTick = async () => {
+    try {
+      const res = await fetch("/api/mock/run", { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text();
+        addLog("ERROR", `Mock run failed: ${res.status} ${txt}`);
+        return;
+      }
+      addLog("SUCCESS", "Mock tick executed successfully.");
+      fetchLiveStatus();
+      fetchLiveTrades();
+    } catch (e: any) {
+      addLog("ERROR", `Mock run network error: ${e?.message || e}`);
+    }
+  };
+
   const fetchLiveStatus = async () => {
     try {
       const res = await fetch("/api/status");
@@ -269,6 +322,7 @@ export default function App() {
         }));
         if (data.cpr_levels) setCprLevels(data.cpr_levels);
         if (data.trading_mode) setTradingMode(data.trading_mode);
+        setMockMode(!!data.mock_mode);
       }
     } catch {
       // backend unreachable — keep stale state
@@ -376,10 +430,19 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ question: trimmed }),
       });
-      const data = await response.json();
+      const text = await response.text();
+      let data: any;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        data = null;
+      }
+
       if (!response.ok) {
-        const errorText = data.detail || "Assistant request failed.";
+        const errorText = data?.detail || text || "Assistant request failed.";
         setAssistantMessages(prev => [...prev, { role: "assistant", text: `Error: ${errorText}` }]);
+      } else if (!data || typeof data.answer !== "string") {
+        setAssistantMessages(prev => [...prev, { role: "assistant", text: `Error: Unexpected response from assistant: ${text}` }]);
       } else {
         setAssistantMessages(prev => [...prev, { role: "assistant", text: data.answer }]);
       }
@@ -741,14 +804,23 @@ export default function App() {
           </div>
           <div className="flex flex-col items-end">
             <span className="text-[10px] text-slate-500 uppercase font-bold font-mono text-right">Engine</span>
-            <button onClick={() => {
-              const target = tradingMode === "paper" ? "live" : "paper";
-              setTradingMode(target);
-              addLog("WARNING", `Mode changed to ${target.toUpperCase()}.`);
-            }}
-              className={`text-xs font-bold font-mono uppercase cursor-pointer transition-all ${tradingMode === "live" ? "text-rose-400 animate-pulse" : "text-sky-400"}`}>
-              {tradingMode === "live" ? "⚠️ Live Trading" : "Paper Trading"}
-            </button>
+            <div className="flex gap-2 items-center">
+              <button onClick={() => handleSetTradingMode(tradingMode === "paper" ? "live" : "paper")}
+                className={`text-xs font-bold font-mono uppercase cursor-pointer transition-all ${tradingMode === "live" ? "text-rose-400 animate-pulse" : "text-sky-400"}`}>
+                {tradingMode === "live" ? "⚠️ Live Trading" : "Paper Trading"}
+              </button>
+              <div className="flex items-center gap-2">
+                <button onClick={handleToggleMockMode}
+                  className={`text-xs px-2 py-0.5 rounded font-mono font-bold ${mockMode ? "bg-emerald-600 text-slate-900" : "bg-slate-800 text-slate-300"}`}>
+                  {mockMode ? "Mock ON" : "Mock OFF"}
+                </button>
+                {mockMode && (
+                  <button onClick={handleRunMockTick} className="text-xs px-2 py-0.5 rounded bg-amber-600 text-slate-900 font-mono font-bold">
+                    Run Mock
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
           <div className="flex flex-col items-end border-l border-slate-800 pl-6 h-10 justify-center">
             <span className="text-2xl font-mono text-white tracking-widest leading-none">{currentTime}</span>

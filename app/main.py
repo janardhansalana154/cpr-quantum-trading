@@ -307,7 +307,7 @@ def monitor_interval_tick():
         logger.info("[MARKET_OPEN=False] [STRATEGY_ALLOWED=False] Tick suppressed — market closed.")
         return
 
-    if not upstox._is_authenticated():
+    if not upstox._is_authenticated() and not settings.MOCK_MODE:
         logger.warning(
             "[DATA_SOURCE=DISCONNECTED] [STRATEGY_ALLOWED=False] "
             "Tick suppressed — Upstox not authenticated. No simulation fallback."
@@ -458,7 +458,10 @@ def get_system_status(db: Session = Depends(get_db)):
     mkt = get_market_status_detail()
 
     auth = upstox._is_authenticated()
-    if auth:
+    if settings.MOCK_MODE:
+        upstox.data_source = "SIMULATION"
+        upstox.websocket_status = "Connected"
+    elif auth:
         upstox.data_source = "UPSTOX LIVE"
         upstox.websocket_status = "Connected"
     else:
@@ -468,7 +471,9 @@ def get_system_status(db: Session = Depends(get_db)):
     nifty_ltp = None
     cmp_source = "DISCONNECTED"
     cmp_ts = None
-    if auth:
+    if settings.MOCK_MODE:
+        cmp_source = "DISCONNECTED"
+    elif auth:
         nifty_ltp = upstox.get_nifty_price()
         if nifty_ltp is not None:
             cmp_source = "UPSTOX_LTP"
@@ -479,7 +484,7 @@ def get_system_status(db: Session = Depends(get_db)):
 
     strategy_allowed = (
         mkt["market_open"]
-        and auth
+        and (settings.MOCK_MODE or auth)
         and daily.trade_count < settings.MAX_DAILY_TRADES
         and not daily.is_blocked
     )
@@ -494,6 +499,7 @@ def get_system_status(db: Session = Depends(get_db)):
         "status": "Running",
         "timestamp": datetime.utcnow().isoformat(),
         "trading_mode": settings.TRADING_MODE,
+        "mock_mode": settings.MOCK_MODE,
         "market_status": mkt["market_status"],
         "market_open": mkt["market_open"],
         "market_detail": mkt,
@@ -777,6 +783,8 @@ def update_config(data: dict, db: Session = Depends(get_db)):
             setattr(settings, attr, int(data[key]))
     if "retest_tolerance" in data:
         settings.RETEST_TOLERANCE = float(data["retest_tolerance"])
+    if "mock_mode" in data:
+        settings.MOCK_MODE = bool(data["mock_mode"])
     if "trading_mode" in data and data["trading_mode"] in ("paper","live"):
         settings.TRADING_MODE = data["trading_mode"]
 
@@ -807,6 +815,20 @@ def reset_daily_state(db: Session = Depends(get_db)):
         state.is_blocked  = False
         db.commit()
     return {"status": "success", "message": f"Daily state reset for {today}."}
+
+
+@app.post("/api/mock/run")
+def run_mock_tick():
+    """Trigger a single strategy tick when Mock Mode is enabled (dashboard button).
+    This runs the same code path as the scheduled monitor_interval_tick but synchronously.
+    """
+    if not settings.MOCK_MODE:
+        raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
+    try:
+        monitor_interval_tick()
+        return {"status": "success", "message": "Mock tick executed."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/health")
