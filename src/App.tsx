@@ -31,6 +31,7 @@ interface SetupState {
   retestLow: number | null;
   confirmationHigh: number | null;
   confirmationLow: number | null;
+  lastReason: string;
 }
 
 interface Candle {
@@ -330,6 +331,35 @@ export default function App() {
     return null;
   };
 
+  const fetchSetupStates = async () => {
+    try {
+      const res = await fetch("/api/setups");
+      if (res.ok) {
+        const data = await res.json();
+        setSetupStates(prev => {
+          const next: Record<string, SetupState> = { ...prev };
+          for (const key of ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]) {
+            if (data[key]) {
+              next[key] = {
+                ...prev[key],
+                state: data[key].state,
+                barsElapsed: data[key].elapsed_bars,
+                retestHigh: data[key].retest_high,
+                retestLow: data[key].retest_low,
+                confirmationHigh: data[key].confirmation_high,
+                confirmationLow: data[key].confirmation_low,
+                lastReason: data[key].last_reason || prev[key].lastReason,
+              };
+            }
+          }
+          return next;
+        });
+      }
+    } catch {
+      // ignore setup fetch failures
+    }
+  };
+
   const stopAuthPopupMonitor = () => {
     if (authStatusPollRef.current !== null) {
       window.clearInterval(authStatusPollRef.current);
@@ -493,10 +523,10 @@ export default function App() {
   ]);
 
   const [setupStates, setSetupStates] = useState<Record<string, SetupState>>({
-    "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-    "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-    "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-    "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
+    "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+    "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+    "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+    "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
   });
 
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -531,7 +561,11 @@ export default function App() {
   useEffect(() => {
     fetchUpstoxStatus();
     fetchLiveStatus();
-    const liveTimer   = setInterval(fetchLiveStatus, 10_000);
+    fetchSetupStates();
+    const liveTimer   = setInterval(() => {
+      fetchLiveStatus();
+      fetchSetupStates();
+    }, 10_000);
     const tradesTimer = setInterval(fetchLiveTrades, 15_000);
     fetchLiveTrades(); // immediate fetch on mount
 
@@ -605,10 +639,10 @@ export default function App() {
     setDemoPnL(0);
     setDemoTradeCount(0);
     setSetupStates({
-      "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-      "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-      "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
-      "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null },
+      "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+      "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+      "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
+      "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
     });
     setSystemLogs([{ timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "[DEMO] Demo reset." }]);
   };
@@ -857,9 +891,36 @@ export default function App() {
                           <div key={step} className={`h-1.5 flex-1 rounded-full transition-all ${ss.state >= step ? `bg-${c}-500` : "bg-slate-800"}`} />
                         ))}
                       </div>
+                      <div className="mt-3 text-[11px] leading-snug text-slate-300 font-mono">
+                        {ss.lastReason}
+                      </div>
                     </div>
                   );
                 })}
+              </div>
+
+              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5">
+                <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-4">
+                  <div>
+                    <h3 className="text-sm font-bold text-white">Why no entry yet?</h3>
+                    <p className="text-[11px] text-slate-500 mt-1">Snapshot of the current setup state and blocking reason for each active setup.</p>
+                  </div>
+                  <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Live explanation</span>
+                </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {(["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"] as const).map(key => {
+                    const ss = setupStates[key];
+                    return (
+                      <div key={key} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <span className="text-[10px] text-slate-400 uppercase font-mono">{key}</span>
+                          <span className="text-[10px] font-bold uppercase text-slate-300">{["IDLE","BROKEN","RECOVERED","ARMED"][ss.state] || "IDLE"}</span>
+                        </div>
+                        <p className="text-[12px] text-slate-200 leading-relaxed">{ss.lastReason}</p>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
 
               {/* DEMO chart — clearly labeled */}

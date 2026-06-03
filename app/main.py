@@ -540,6 +540,7 @@ def get_active_setups():
             "retest_low": m.r_low,
             "confirmation_high": m.c_high,
             "confirmation_low": m.c_low,
+            "last_reason": m.last_reason,
             "configs": {"fail_win": m.fail_win, "ret_win": m.ret_win,
                         "con_win": m.con_win, "ent_win": m.ent_win, "ret_tol": m.ret_tol},
         }

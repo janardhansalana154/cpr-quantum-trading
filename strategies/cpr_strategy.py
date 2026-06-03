@@ -89,6 +89,8 @@ class SetupStateMachine:
         self.c_high: Optional[float] = None
         self.c_low:  Optional[float] = None
 
+        self.last_reason: str = "Waiting for breakout"
+
     def bars_elapsed(self, idx: int) -> int:
         return idx - self.state_bar
 
@@ -99,6 +101,10 @@ class SetupStateMachine:
         self.state_bar = bar_idx
         self.r_high    = None
         self.r_low     = None
+        self.last_reason = reason or "Reset to idle"
+
+    def _set_reason(self, reason: str):
+        self.last_reason = reason
 
     def _re_enter_state1(self, bar_idx: int, reason: str = ""):
         """Re-broken through key level — restart from State 1, not full reset."""
@@ -188,25 +194,33 @@ class SetupStateMachine:
                 # Change 1: both hi AND cl must be above R1
                 if hi > levels.r1 and cl > levels.r1:
                     self.state = 1; self.state_bar = idx
+                    self._set_reason("Breakout valid. Waiting for recovery below R1.")
                     logger.info(f"SETUP_A: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > R1={levels.r1}")
+                else:
+                    self._set_reason("Waiting for a valid breakout above R1.")
 
             elif self.state == 1:
                 if cl < levels.r1:
                     self.state = 2; self.state_bar = idx
+                    self._set_reason("Recovered inside after breakout. Waiting for retest near R1.")
                     logger.info(f"SETUP_A: bar {idx} STATE2 RECOVERED. cl={cl} < R1={levels.r1}")
-                # still above R1 — stay in state 1
+                else:
+                    self._set_reason("Breakout open: still above R1, waiting for recovery.")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
                     if cl > levels.r1:
                         # Re-broken above R1 → back to State 1
                         self._re_enter_state1(idx, f"cl={cl} > R1={levels.r1} in State 2")
+                        self._set_reason("Re-broken above R1 during recovery. Restarting breakout state.")
                     elif (levels.r1 - self.ret_tol) <= hi <= (levels.r1 + self.ret_tol) and cl < levels.r1:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retested R1 successfully. Waiting for confirmation break below the retest low.")
                         logger.info(f"SETUP_A: bar {idx} STATE3 RETESTED. hi={hi} ≈ R1={levels.r1} r_low={lo}")
                     else:
                         self.state_bar = idx
+                        self._set_reason("Waiting for a valid retest candle near R1.")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -215,6 +229,7 @@ class SetupStateMachine:
                     if (levels.r1 - self.ret_tol) <= hi <= (levels.r1 + self.ret_tol) and cl < levels.r1:
                         self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retest candle updated. Waiting for confirmation break below the new retest low.")
                         logger.info(
                             f"SETUP_A: bar {idx} STATE3 RETEST UPDATED. hi={hi} ≈ R1={levels.r1} r_low={lo}"
                         )
@@ -222,9 +237,12 @@ class SetupStateMachine:
                         self.state = 4
                         self.state_bar = idx
                         self.c_low = lo
+                        self._set_reason("Confirmed retest. Armed for entry on next candle below confirmation low.")
                         logger.info(
                             f"SETUP_A: bar {idx} STATE4 CONFIRMED. lo={lo} < r_low={self.r_low}"
                         )
+                    else:
+                        self._set_reason("Waiting for confirmation break below retest low.")
                 else:
                     self.reset_state(idx, "Confirmation window elapsed")
 
@@ -244,15 +262,19 @@ class SetupStateMachine:
                                 "take_profit":   _tp,
                                 "lots":          settings.POSITION_LOTS,
                             }
+                            self._set_reason("Entry triggered by break below confirmation low.")
                             logger.info(
                                 f"SETUP_A: bar {idx} ENTRY. lo={lo} < c_low={self.c_low} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
+                            self._set_reason("Entry skipped: TP insufficient or still inside CPR.")
                             logger.info(
                                 f"SETUP_A: bar {idx} SKIPPED. TP={_tp} insufficient or inside CPR."
                             )
                         self.reset_state(idx, "Entry decision made")
+                    else:
+                        self._set_reason("Armed for entry. Waiting for break below confirmation low.")
                 else:
                     self.reset_state(idx, "Entry window elapsed")
 
@@ -270,23 +292,32 @@ class SetupStateMachine:
             if self.state == 0:
                 if lo < levels.s1 and cl < levels.s1:
                     self.state = 1; self.state_bar = idx
+                    self._set_reason("Breakout valid. Waiting for recovery above S1.")
                     logger.info(f"SETUP_B: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < S1={levels.s1}")
+                else:
+                    self._set_reason("Waiting for a valid breakout below S1.")
 
             elif self.state == 1:
                 if cl > levels.s1:
                     self.state = 2; self.state_bar = idx
+                    self._set_reason("Recovered inside after breakout. Waiting for retest near S1.")
                     logger.info(f"SETUP_B: bar {idx} STATE2 RECOVERED. cl={cl} > S1={levels.s1}")
+                else:
+                    self._set_reason("Breakout open: still below S1, waiting for recovery.")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
                     if cl < levels.s1:
                         self._re_enter_state1(idx, f"cl={cl} < S1={levels.s1} in State 2")
+                        self._set_reason("Re-broken below S1 during recovery. Restarting breakout state.")
                     elif (levels.s1 - self.ret_tol) <= lo <= (levels.s1 + self.ret_tol) and cl > levels.s1:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retested S1 successfully. Waiting for confirmation break above the retest high.")
                         logger.info(f"SETUP_B: bar {idx} STATE3 RETESTED. lo={lo} ≈ S1={levels.s1} r_high={hi}")
                     else:
                         self.state_bar = idx
+                        self._set_reason("Waiting for a valid retest candle near S1.")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -295,6 +326,7 @@ class SetupStateMachine:
                     if (levels.s1 - self.ret_tol) <= lo <= (levels.s1 + self.ret_tol) and cl > levels.s1:
                         self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retest candle updated. Waiting for confirmation break above the new retest high.")
                         logger.info(
                             f"SETUP_B: bar {idx} STATE3 RETEST UPDATED. lo={lo} ≈ S1={levels.s1} r_high={hi}"
                         )
@@ -302,9 +334,12 @@ class SetupStateMachine:
                         self.state = 4
                         self.state_bar = idx
                         self.c_high = hi
+                        self._set_reason("Confirmed retest. Armed for entry on next candle above confirmation high.")
                         logger.info(
                             f"SETUP_B: bar {idx} STATE4 CONFIRMED. hi={hi} > r_high={self.r_high}"
                         )
+                    else:
+                        self._set_reason("Waiting for confirmation break above retest high.")
                 else:
                     self.reset_state(idx, "Confirmation window elapsed")
 
@@ -324,13 +359,17 @@ class SetupStateMachine:
                                 "take_profit":   _tp,
                                 "lots":          settings.POSITION_LOTS,
                             }
+                            self._set_reason("Entry triggered by break above confirmation high.")
                             logger.info(
                                 f"SETUP_B: bar {idx} ENTRY. hi={hi} > c_high={self.c_high} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
+                            self._set_reason("Entry skipped: TP insufficient or still inside CPR.")
                             logger.info(f"SETUP_B: bar {idx} SKIPPED. TP={_tp} insufficient or inside CPR.")
                         self.reset_state(idx, "Entry decision made")
+                    else:
+                        self._set_reason("Armed for entry. Waiting for break above confirmation high.")
                 else:
                     self.reset_state(idx, "Entry window elapsed")
 
@@ -351,23 +390,32 @@ class SetupStateMachine:
                 # Change 1: both lo AND cl must be below TC for a valid breakout
                 if lo < levels.tc and cl < levels.tc:
                     self.state = 1; self.state_bar = idx
+                    self._set_reason("Breakout valid below TC. Waiting for recovery above TC.")
                     logger.info(f"SETUP_C: bar {idx} STATE1 BROKEN. lo={lo} cl={cl} < TC={levels.tc}")
+                else:
+                    self._set_reason("Waiting for a valid breakout below TC.")
 
             elif self.state == 1:
                 if cl < levels.tc:
                     self.state = 2; self.state_bar = idx
+                    self._set_reason("Recovered inside after TC breakout. Waiting for retest near TC.")
                     logger.info(f"SETUP_C: bar {idx} STATE2 RECOVERED. cl={cl} < TC={levels.tc}")
+                else:
+                    self._set_reason("Breakout open: still below TC, waiting for recovery.")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
                     if cl < levels.tc:
                         self._re_enter_state1(idx, f"cl={cl} < TC={levels.tc} in State 2")
+                        self._set_reason("Re-broken below TC during recovery. Restarting breakout state.")
                     elif (levels.tc - self.ret_tol) <= lo <= (levels.tc + self.ret_tol) and cl > levels.tc:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retested TC successfully. Waiting for confirmation break above the retest high.")
                         logger.info(f"SETUP_C: bar {idx} STATE3 RETESTED. lo={lo} ≈ TC={levels.tc} r_high={hi}")
                     else:
                         self.state_bar = idx
+                        self._set_reason("Waiting for a valid retest candle near TC.")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -376,6 +424,7 @@ class SetupStateMachine:
                     if (levels.tc - self.ret_tol) <= lo <= (levels.tc + self.ret_tol) and cl > levels.tc:
                         self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retest candle updated. Waiting for confirmation break above the new retest high.")
                         logger.info(
                             f"SETUP_C: bar {idx} STATE3 RETEST UPDATED. lo={lo} ≈ TC={levels.tc} r_high={hi}"
                         )
@@ -383,9 +432,12 @@ class SetupStateMachine:
                         self.state = 4
                         self.state_bar = idx
                         self.c_high = hi
+                        self._set_reason("Confirmed retest. Armed for entry on next candle above confirmation high.")
                         logger.info(
                             f"SETUP_C: bar {idx} STATE4 CONFIRMED. hi={hi} > r_high={self.r_high}"
                         )
+                    else:
+                        self._set_reason("Waiting for confirmation break above retest high.")
                 else:
                     self.reset_state(idx, "Confirmation window elapsed")
 
@@ -405,13 +457,17 @@ class SetupStateMachine:
                                 "take_profit":   _tp,
                                 "lots":          settings.POSITION_LOTS,
                             }
+                            self._set_reason("Entry triggered by break above confirmation high.")
                             logger.info(
                                 f"SETUP_C: bar {idx} ENTRY. hi={hi} > c_high={self.c_high} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
+                            self._set_reason("Entry skipped: TP insufficient or still inside CPR.")
                             logger.info(f"SETUP_C: bar {idx} SKIPPED. TP={_tp} insufficient or inside CPR.")
                         self.reset_state(idx, "Entry decision made")
+                    else:
+                        self._set_reason("Armed for entry. Waiting for break above confirmation high.")
                 else:
                     self.reset_state(idx, "Entry window elapsed")
 
@@ -432,23 +488,32 @@ class SetupStateMachine:
                 # Change 1: both hi AND cl must be above BC for a valid breakout
                 if hi > levels.bc and cl > levels.bc:
                     self.state = 1; self.state_bar = idx
+                    self._set_reason("Breakout valid above BC. Waiting for recovery below BC.")
                     logger.info(f"SETUP_D: bar {idx} STATE1 BROKEN. hi={hi} cl={cl} > BC={levels.bc}")
+                else:
+                    self._set_reason("Waiting for a valid breakout above BC.")
 
             elif self.state == 1:
                 if cl > levels.bc:
                     self.state = 2; self.state_bar = idx
+                    self._set_reason("Recovered inside after breakout. Waiting for retest near BC.")
                     logger.info(f"SETUP_D: bar {idx} STATE2 RECOVERED. cl={cl} > BC={levels.bc}")
+                else:
+                    self._set_reason("Breakout open: still above BC, waiting for recovery.")
 
             elif self.state == 2:
                 if self.bars_elapsed(idx) <= self.ret_win:
                     if cl > levels.bc:
                         self._re_enter_state1(idx, f"cl={cl} > BC={levels.bc} in State 2")
+                        self._set_reason("Re-broken above BC during recovery. Restarting breakout state.")
                     elif (levels.bc - self.ret_tol) <= hi <= (levels.bc + self.ret_tol) and cl < levels.bc:
                         self.state = 3; self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retested BC successfully. Waiting for confirmation break below the retest low.")
                         logger.info(f"SETUP_D: bar {idx} STATE3 RETESTED. hi={hi} ≈ BC={levels.bc} r_low={lo}")
                     else:
                         self.state_bar = idx
+                        self._set_reason("Waiting for a valid retest candle near BC.")
                 else:
                     self.reset_state(idx, "Retest window elapsed")
 
@@ -457,6 +522,7 @@ class SetupStateMachine:
                     if (levels.bc - self.ret_tol) <= hi <= (levels.bc + self.ret_tol) and cl < levels.bc:
                         self.state_bar = idx
                         self.r_high = hi; self.r_low = lo
+                        self._set_reason("Retest candle updated. Waiting for confirmation break below the new retest low.")
                         logger.info(
                             f"SETUP_D: bar {idx} STATE3 RETEST UPDATED. hi={hi} ≈ BC={levels.bc} r_low={lo}"
                         )
@@ -464,9 +530,12 @@ class SetupStateMachine:
                         self.state = 4
                         self.state_bar = idx
                         self.c_low = lo
+                        self._set_reason("Confirmed retest. Armed for entry on next candle below confirmation low.")
                         logger.info(
                             f"SETUP_D: bar {idx} STATE4 CONFIRMED. lo={lo} < r_low={self.r_low}"
                         )
+                    else:
+                        self._set_reason("Waiting for confirmation break below retest low.")
                 else:
                     self.reset_state(idx, "Confirmation window elapsed")
 
@@ -486,13 +555,17 @@ class SetupStateMachine:
                                 "take_profit":   _tp,
                                 "lots":          settings.POSITION_LOTS,
                             }
+                            self._set_reason("Entry triggered by break below confirmation low.")
                             logger.info(
                                 f"SETUP_D: bar {idx} ENTRY. lo={lo} < c_low={self.c_low} "
                                 f"entry={_entry} SL={_sl} TP={_tp}"
                             )
                         else:
+                            self._set_reason("Entry skipped: TP insufficient or still inside CPR.")
                             logger.info(f"SETUP_D: bar {idx} SKIPPED. TP={_tp} insufficient or inside CPR.")
                         self.reset_state(idx, "Entry decision made")
+                    else:
+                        self._set_reason("Armed for entry. Waiting for break below confirmation low.")
                 else:
                     self.reset_state(idx, "Entry window elapsed")
 
