@@ -262,13 +262,14 @@ def check_active_position_targets():
                 notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(closed.pnl), total_day_pnl)
             return
 
+        # Trigger SL/TP based on option premium levels (stored as option prices)
         is_sl = is_tp = False
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
-            is_sl = index_price <= open_trade.stop_loss
-            is_tp = index_price >= open_trade.take_profit
+            is_sl = option_price <= open_trade.stop_loss
+            is_tp = option_price >= open_trade.take_profit
         else:
-            is_sl = index_price >= open_trade.stop_loss
-            is_tp = index_price <= open_trade.take_profit
+            is_sl = option_price >= open_trade.stop_loss
+            is_tp = option_price <= open_trade.take_profit
 
         if not (is_sl or is_tp):
             return
@@ -430,20 +431,30 @@ def monitor_interval_tick(force_market_open: bool = False):
                         is_paper=(settings.TRADING_MODE == "paper"),
                     )
                     if rec:
-                        rec.stop_loss   = details["stop_loss"]
-                        rec.take_profit = details["take_profit"]
+                        # Store SL/TP as option premium levels (not index levels).
+                        entry_premium = float(order.get("avg_price") or 0.0)
+                        # Use SL_BUFFER as premium buffer (rupee points) and REWARD_RATIO for TP calculation
+                        if details["trade_type"] == "SELL":
+                            premium_sl = round(entry_premium + settings.SL_BUFFER, 2)
+                            premium_tp = round(max(0.01, entry_premium - (settings.REWARD_RATIO * settings.SL_BUFFER)), 2)
+                        else:
+                            premium_sl = round(max(0.01, entry_premium - settings.SL_BUFFER), 2)
+                            premium_tp = round(entry_premium + (settings.REWARD_RATIO * settings.SL_BUFFER), 2)
+
+                        rec.stop_loss = premium_sl
+                        rec.take_profit = premium_tp
                         db.commit()
                         logger.info(
                             f"[TRADES_TODAY={daily_now.trade_count+1}/{settings.MAX_DAILY_TRADES}] "
-                            f"Trade recorded: {name} | {opt_sym}"
+                            f"Trade recorded: {name} | {opt_sym} @ {entry_premium:.2f} (SL={premium_sl} TP={premium_tp})"
                         )
                     notify_order_placed(
                         setup=name, buy_sell="BUY",
                         details=(
                             f"Option: `{opt_sym}`\nLots: `1`\n"
                             f"Premium: `₹{order['avg_price']:.2f}`\n"
-                            f"SL: `{details['stop_loss']:.2f}`\n"
-                            f"TP: `{details['take_profit']:.2f}`"
+                            f"SL: `₹{(rec.stop_loss if rec else 0):.2f}`\n"
+                            f"TP: `₹{(rec.take_profit if rec else 0):.2f}`"
                         ),
                     )
                 else:
