@@ -217,8 +217,9 @@ def check_active_position_targets():
             second=0, microsecond=0
         )
         if now_ist >= squareoff_cutoff and open_trade:
-            ltp = upstox.get_nifty_price()
-            exit_price = ltp if ltp else open_trade.entry_price
+            index_price = upstox.get_nifty_price()
+            option_price = upstox.get_option_ltp(open_trade.option_symbol)
+            exit_price = option_price if option_price is not None else (index_price if index_price else open_trade.entry_price)
             rm = RiskManager(db)
             closed = rm.register_trade_exit(open_trade.id, exit_price, "CLOSED_EOD")
             if closed:
@@ -233,44 +234,47 @@ def check_active_position_targets():
         if not mkt["market_open"]:
             return
 
-        ltp = upstox.get_nifty_price()
-        if ltp is None:
-            logger.warning("[CMP_SOURCE=DISCONNECTED] Cannot check SL/TP — no live LTP.")
+        index_price = upstox.get_nifty_price()
+        option_price = upstox.get_option_ltp(open_trade.option_symbol)
+        if index_price is None:
+            logger.warning("[CMP_SOURCE=DISCONNECTED] Cannot check SL/TP — no live index LTP.")
+            return
+        if option_price is None:
+            logger.warning(f"[CMP_SOURCE=DISCONNECTED] Cannot check SL/TP — no option LTP for {open_trade.option_symbol}.")
             return
 
         rm_check = RiskManager(db)
         day_state = rm_check.get_or_create_daily_state()
         qty = open_trade.lots * settings.NIFTY_LOT_SIZE
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
-            unrealised = (ltp - open_trade.entry_price) * qty
+            unrealised = (option_price - open_trade.entry_price) * qty
         else:
-            unrealised = (open_trade.entry_price - ltp) * qty
+            unrealised = (open_trade.entry_price - option_price) * qty
         total_day_pnl = day_state.realized_pnl + unrealised
         if total_day_pnl <= -settings.DAILY_LOSS_LIMIT:
-            closed = rm_check.register_trade_exit(open_trade.id, ltp, "CLOSED_SL_LIMIT")
+            upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
+            closed = rm_check.register_trade_exit(open_trade.id, option_price, "CLOSED_SL_LIMIT")
             if closed:
-                upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
                 logger.warning(
                     f"[LOSS LIMIT] Trade {open_trade.id} force-closed. "
                     f"Day P&L ₹{total_day_pnl:.2f} breached ₹{-settings.DAILY_LOSS_LIMIT:.2f}"
                 )
-                notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(unrealised), total_day_pnl)
+                notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(closed.pnl), total_day_pnl)
             return
 
         is_sl = is_tp = False
         if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
-            is_sl = ltp <= open_trade.stop_loss
-            is_tp = ltp >= open_trade.take_profit
+            is_sl = index_price <= open_trade.stop_loss
+            is_tp = index_price >= open_trade.take_profit
         else:
-            is_sl = ltp >= open_trade.stop_loss
-            is_tp = ltp <= open_trade.take_profit
+            is_sl = index_price >= open_trade.stop_loss
+            is_tp = index_price <= open_trade.take_profit
 
         if not (is_sl or is_tp):
             return
 
         exit_status = "CLOSED_SL" if is_sl else "CLOSED_TP"
-        premium_chg  = (ltp - open_trade.entry_price) * (1 if open_trade.trade_type == "BUY" else -1)
-        exit_premium = max(5.0, open_trade.entry_price + premium_chg * 0.5)
+        exit_premium = max(5.0, round(option_price, 2))
 
         upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
         rm = RiskManager(db)
@@ -855,6 +859,14 @@ def update_config(data: dict, db: Session = Depends(get_db)):
         m.ret_tol  = settings.RETEST_TOLERANCE
 
     return {"status": "success", "message": "Config updated."}
+
+
+@app.get("/api/config")
+def get_config():
+    return {
+        "telegram_bot_token": settings.TELEGRAM_BOT_TOKEN or "",
+        "telegram_chat_id": settings.TELEGRAM_CHAT_ID or "",
+    }
 
 
 @app.post("/api/reset-strategy")

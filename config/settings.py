@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from typing import Literal
 from pydantic_settings import BaseSettings
@@ -71,9 +72,24 @@ def _resolve_upstox_secrets_path() -> str:
             continue
     return "/tmp/upstox_secrets.json"
 
+def _load_secrets_file(path: str) -> dict:
+    try:
+        if path and os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f) or {}
+    except Exception:
+        pass
+    return {}
+
 try:
     settings = Settings()
     settings.UPSTOX_SECRETS_PATH = _resolve_upstox_secrets_path()
+    secrets = _load_secrets_file(settings.UPSTOX_SECRETS_PATH)
+    if isinstance(secrets, dict):
+        settings.TELEGRAM_BOT_TOKEN = secrets.get("telegram_bot_token", settings.TELEGRAM_BOT_TOKEN)
+        settings.TELEGRAM_CHAT_ID = secrets.get("telegram_chat_id", settings.TELEGRAM_CHAT_ID)
+        settings.UPSTOX_API_KEY = secrets.get("api_key", settings.UPSTOX_API_KEY)
+        settings.UPSTOX_API_SECRET = secrets.get("api_secret", settings.UPSTOX_API_SECRET)
 except Exception as e:
     # Handle if some required variables failed validation (fallback to safe defaults for local test)
     print(f"Warning loading settings: {e}. Falling back to default settings.")

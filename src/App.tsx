@@ -401,6 +401,23 @@ export default function App() {
     return null;
   };
 
+  const fetchDashboardConfig = async () => {
+    try {
+      const response = await fetch("/api/config");
+      if (response.ok) {
+        const data = await response.json();
+        if (typeof data.telegram_bot_token === "string") {
+          setTelegramToken(data.telegram_bot_token);
+        }
+        if (typeof data.telegram_chat_id === "string") {
+          setTelegramChatId(data.telegram_chat_id);
+        }
+      }
+    } catch {
+      // ignore failures; fields remain empty until user saves.
+    }
+  };
+
   const fetchSetupStates = async () => {
     try {
       const res = await fetch("/api/setups");
@@ -673,6 +690,7 @@ export default function App() {
     fetchUpstoxStatus();
     fetchLiveStatus();
     fetchSetupStates();
+    fetchDashboardConfig();
     const liveTimer   = setInterval(() => {
       fetchLiveStatus();
       fetchSetupStates();

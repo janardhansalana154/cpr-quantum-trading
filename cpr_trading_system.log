@@ -35,3 +35,281 @@
 2026-06-03 10:17:21,464 [INFO] CPR_System.Database: Database migration: added refresh_token column to upstox_tokens.
 2026-06-03 10:17:21,464 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
 2026-06-03 10:17:21,466 [INFO] httpx: HTTP Request: POST http://testserver/api/assistant "HTTP/1.1 200 OK"
+2026-06-03 12:14:45,156 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-06-03 12:14:45,442 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-06-03 12:14:57,663 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-06-03 12:14:57,676 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-06-03 12:14:57,677 [INFO] CPR_System.Main: [STARTUP] Database initialised. UpstoxClient created.
+2026-06-03 12:14:57,677 [WARNING] CPR_System.Main: [STARTUP] No valid Upstox session available on startup.
+2026-06-03 12:14:57,719 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:14:57,720 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:14:57,720 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:14:57,720 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:14:57,721 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:14:57,722 [INFO] apscheduler.scheduler: Added job "monitor_interval_tick" to job store "default"
+2026-06-03 12:14:57,722 [INFO] apscheduler.scheduler: Added job "check_active_position_targets" to job store "default"
+2026-06-03 12:14:57,722 [INFO] apscheduler.scheduler: Added job "keep_upstox_alive" to job store "default"
+2026-06-03 12:14:57,722 [INFO] apscheduler.scheduler: Added job "daily_token_refresh" to job store "default"
+2026-06-03 12:14:57,723 [INFO] apscheduler.scheduler: Added job "reset_daily_cpr_cache" to job store "default"
+2026-06-03 12:14:57,723 [INFO] apscheduler.scheduler: Scheduler started
+2026-06-03 12:14:57,723 [INFO] CPR_System.Main: [STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + 10m keepalive + 8:55AM IST daily token refresh.
+2026-06-03 12:14:57,731 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:44:57+05:30 (Wednesday, holiday=False)
+2026-06-03 12:14:57,731 [INFO] CPR_System.Risk: Initializing new risk status records for date: 2026-06-03
+2026-06-03 12:14:57,739 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=DISCONNECTED]
+2026-06-03 12:14:57,739 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:14:57,739 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 1 5m candles received.
+2026-06-03 12:14:57,739 [INFO] CPR_System.Main: [LIVE] CPR computed: Pivot=24052.33 TC=24056.50 BC=24048.17 R1=24086.67 S1=24009.67
+2026-06-03 12:14:57,739 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24054.0
+2026-06-03 12:14:57,740 [INFO] CPR_System.Strategy: SETUP_C: bar 0 STATE1 BROKEN. lo=24048.0 cl=24054.0 < TC=24056.5
+2026-06-03 12:14:57,740 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE1 BROKEN. hi=24058.0 cl=24054.0 > BC=24048.17
+2026-06-03 12:14:57,740 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:15:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:14:57,740 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 2/7
+2026-06-03 12:15:06,543 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-06-03 12:15:06,558 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-06-03 12:15:06,558 [INFO] CPR_System.Main: [STARTUP] Database initialised. UpstoxClient created.
+2026-06-03 12:15:06,558 [WARNING] CPR_System.Main: [STARTUP] No valid Upstox session available on startup.
+2026-06-03 12:15:06,562 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:06,563 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:06,563 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:06,563 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:06,563 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:06,564 [INFO] apscheduler.scheduler: Added job "monitor_interval_tick" to job store "default"
+2026-06-03 12:15:06,564 [INFO] apscheduler.scheduler: Added job "check_active_position_targets" to job store "default"
+2026-06-03 12:15:06,564 [INFO] apscheduler.scheduler: Added job "keep_upstox_alive" to job store "default"
+2026-06-03 12:15:06,565 [INFO] apscheduler.scheduler: Added job "daily_token_refresh" to job store "default"
+2026-06-03 12:15:06,565 [INFO] apscheduler.scheduler: Added job "reset_daily_cpr_cache" to job store "default"
+2026-06-03 12:15:06,565 [INFO] apscheduler.scheduler: Scheduler started
+2026-06-03 12:15:06,565 [INFO] CPR_System.Main: [STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + 10m keepalive + 8:55AM IST daily token refresh.
+2026-06-03 12:15:06,573 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,573 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=DISCONNECTED]
+2026-06-03 12:15:06,574 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,574 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 1 5m candles received.
+2026-06-03 12:15:06,574 [INFO] CPR_System.Main: [LIVE] CPR computed: Pivot=24052.33 TC=24056.50 BC=24048.17 R1=24086.67 S1=24009.67
+2026-06-03 12:15:06,574 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24054.0
+2026-06-03 12:15:06,574 [INFO] CPR_System.Strategy: SETUP_C: bar 0 STATE1 BROKEN. lo=24048.0 cl=24054.0 < TC=24056.5
+2026-06-03 12:15:06,574 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE1 BROKEN. hi=24058.0 cl=24054.0 > BC=24048.17
+2026-06-03 12:15:06,575 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:15:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,575 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 2/7
+2026-06-03 12:15:06,576 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,577 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,577 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,577 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 2 5m candles received.
+2026-06-03 12:15:06,577 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24057.0
+2026-06-03 12:15:06,577 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:06,577 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE2 RECOVERED. cl=24057.0 > TC=24056.5
+2026-06-03 12:15:06,577 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,578 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:20:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,578 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 3/7
+2026-06-03 12:15:06,580 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,580 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,580 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,580 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 3 5m candles received.
+2026-06-03 12:15:06,581 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24059.0
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_C: RE-BROKEN 2→1 @ bar 0. cl=24054.0 < TC=24056.5 in State 2
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE2 RECOVERED. cl=24057.0 > TC=24056.5
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETESTED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:06,581 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:06,582 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:25:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,582 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 4/7
+2026-06-03 12:15:06,583 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,584 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,584 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,584 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 4 5m candles received.
+2026-06-03 12:15:06,584 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24061.0
+2026-06-03 12:15:06,584 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 0. cl=24054.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,584 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:06,584 [INFO] CPR_System.Strategy: SETUP_D: bar 1 STATE2 RECOVERED. cl=24057.0 > BC=24048.17
+2026-06-03 12:15:06,585 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:06,585 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 2. cl=24059.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,585 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:06,585 [INFO] CPR_System.Strategy: SETUP_D: bar 3 STATE2 RECOVERED. cl=24061.0 > BC=24048.17
+2026-06-03 12:15:06,586 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:30:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,586 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 5/7
+2026-06-03 12:15:06,587 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,588 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,588 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,588 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 5 5m candles received.
+2026-06-03 12:15:06,588 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24062.0
+2026-06-03 12:15:06,588 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 0. cl=24054.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,588 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:06,588 [INFO] CPR_System.Strategy: SETUP_D: bar 1 STATE2 RECOVERED. cl=24057.0 > BC=24048.17
+2026-06-03 12:15:06,588 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:06,588 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 2. cl=24059.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,589 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:06,589 [INFO] CPR_System.Strategy: SETUP_D: bar 3 STATE2 RECOVERED. cl=24061.0 > BC=24048.17
+2026-06-03 12:15:06,589 [INFO] CPR_System.Strategy: SETUP_C: bar 4 STATE3 RETEST UPDATED. lo=24057.0 ≈ TC=24056.5 r_high=24063.0
+2026-06-03 12:15:06,589 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 4. cl=24062.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,589 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:35:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,590 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 6/7
+2026-06-03 12:15:06,591 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,592 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,592 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,592 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 6 5m candles received.
+2026-06-03 12:15:06,592 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24065.0
+2026-06-03 12:15:06,592 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 3. cl=24061.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_C: bar 4 STATE3 RETEST UPDATED. lo=24057.0 ≈ TC=24056.5 r_high=24063.0
+2026-06-03 12:15:06,593 [INFO] CPR_System.Strategy: SETUP_D: bar 4 STATE2 RECOVERED. cl=24062.0 > BC=24048.17
+2026-06-03 12:15:06,594 [INFO] CPR_System.Strategy: SETUP_C: bar 5 STATE4 CONFIRMED. hi=24066.0 > r_high=24063.0
+2026-06-03 12:15:06,594 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 5. cl=24065.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,594 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:40:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,594 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 7/7
+2026-06-03 12:15:06,596 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,597 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,597 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,597 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 7 5m candles received.
+2026-06-03 12:15:06,597 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24067.0
+2026-06-03 12:15:06,597 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:06,597 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,597 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:06,597 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 3. cl=24061.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,598 [INFO] CPR_System.Strategy: SETUP_D: bar 4 STATE2 RECOVERED. cl=24062.0 > BC=24048.17
+2026-06-03 12:15:06,598 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 5. cl=24065.0 > BC=24048.17 in State 2
+2026-06-03 12:15:06,598 [INFO] CPR_System.Strategy: SETUP_C: bar 6 ENTRY. hi=24068.0 > c_high=24066.0 entry=24067.0 SL=24054.0 TP=24083.67
+2026-06-03 12:15:06,598 [INFO] CPR_System.Strategy: SETUP_C: RESET 4→0 @ bar 6. Entry decision made
+2026-06-03 12:15:06,598 [INFO] CPR_System.Main: [LIVE] SETUP_C TRIGGERED | candle=2026-06-04T09:45:00+05:30 close=24067.0
+2026-06-03 12:15:06,598 [WARNING] CPR_System.Main: [TIME CUTOFF] SETUP_C signal at 17:45 IST rejected — no new entries after 14:00 IST.
+2026-06-03 12:15:06,598 [INFO] CPR_System.Strategy: SETUP_D: bar 6 STATE2 RECOVERED. cl=24067.0 > BC=24048.17
+2026-06-03 12:15:06,599 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:45:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:06,599 [INFO] CPR_System.Upstox: [MOCK] No further mock bars to advance.
+2026-06-03 12:15:06,600 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:06+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:06,601 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:06,601 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:06,601 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 7 5m candles received.
+2026-06-03 12:15:06,601 [INFO] CPR_System.Upstox: [MOCK] No further mock bars to advance.
+2026-06-03 12:15:38,062 [INFO] CPR_System.Database: Using local testing database (SQLite): sqlite:///./cpr_trading.db
+2026-06-03 12:15:38,075 [INFO] CPR_System.Database: Database schemas validated and tables created successfully.
+2026-06-03 12:15:38,075 [INFO] CPR_System.Main: [STARTUP] Database initialised. UpstoxClient created.
+2026-06-03 12:15:38,075 [WARNING] CPR_System.Main: [STARTUP] No valid Upstox session available on startup.
+2026-06-03 12:15:38,079 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:38,080 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:38,080 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:38,080 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:38,080 [INFO] apscheduler.scheduler: Adding job tentatively -- it will be properly scheduled when the scheduler starts
+2026-06-03 12:15:38,081 [INFO] apscheduler.scheduler: Added job "monitor_interval_tick" to job store "default"
+2026-06-03 12:15:38,081 [INFO] apscheduler.scheduler: Added job "check_active_position_targets" to job store "default"
+2026-06-03 12:15:38,081 [INFO] apscheduler.scheduler: Added job "keep_upstox_alive" to job store "default"
+2026-06-03 12:15:38,081 [INFO] apscheduler.scheduler: Added job "daily_token_refresh" to job store "default"
+2026-06-03 12:15:38,082 [INFO] apscheduler.scheduler: Added job "reset_daily_cpr_cache" to job store "default"
+2026-06-03 12:15:38,082 [INFO] apscheduler.scheduler: Scheduler started
+2026-06-03 12:15:38,082 [INFO] CPR_System.Main: [STARTUP] Scheduler running: 5m strategy tick + 30s SL/TP + 10m keepalive + 8:55AM IST daily token refresh.
+2026-06-03 12:15:38,089 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,090 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=DISCONNECTED]
+2026-06-03 12:15:38,090 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,090 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 1 5m candles received.
+2026-06-03 12:15:38,091 [INFO] CPR_System.Main: [LIVE] CPR computed: Pivot=24052.33 TC=24056.50 BC=24048.17 R1=24086.67 S1=24009.67
+2026-06-03 12:15:38,091 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24054.0
+2026-06-03 12:15:38,091 [INFO] CPR_System.Strategy: SETUP_C: bar 0 STATE1 BROKEN. lo=24048.0 cl=24054.0 < TC=24056.5
+2026-06-03 12:15:38,091 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE1 BROKEN. hi=24058.0 cl=24054.0 > BC=24048.17
+2026-06-03 12:15:38,091 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:15:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,092 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 2/7
+2026-06-03 12:15:38,093 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,093 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,094 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,094 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 2 5m candles received.
+2026-06-03 12:15:38,094 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24057.0
+2026-06-03 12:15:38,094 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:38,094 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE2 RECOVERED. cl=24057.0 > TC=24056.5
+2026-06-03 12:15:38,094 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,095 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:20:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,095 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 3/7
+2026-06-03 12:15:38,096 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,097 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,097 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,097 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 3 5m candles received.
+2026-06-03 12:15:38,097 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24059.0
+2026-06-03 12:15:38,097 [INFO] CPR_System.Strategy: SETUP_C: RE-BROKEN 2→1 @ bar 0. cl=24054.0 < TC=24056.5 in State 2
+2026-06-03 12:15:38,097 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:38,097 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE2 RECOVERED. cl=24057.0 > TC=24056.5
+2026-06-03 12:15:38,098 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,098 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETESTED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:38,098 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:38,098 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:25:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,098 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 4/7
+2026-06-03 12:15:38,100 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,100 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,100 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,100 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 4 5m candles received.
+2026-06-03 12:15:38,100 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24061.0
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 0. cl=24054.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_D: bar 1 STATE2 RECOVERED. cl=24057.0 > BC=24048.17
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 2. cl=24059.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:38,101 [INFO] CPR_System.Strategy: SETUP_D: bar 3 STATE2 RECOVERED. cl=24061.0 > BC=24048.17
+2026-06-03 12:15:38,102 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:30:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,102 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 5/7
+2026-06-03 12:15:38,103 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,104 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,104 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,104 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 5 5m candles received.
+2026-06-03 12:15:38,104 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24062.0
+2026-06-03 12:15:38,104 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 0. cl=24054.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,104 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:38,104 [INFO] CPR_System.Strategy: SETUP_D: bar 1 STATE2 RECOVERED. cl=24057.0 > BC=24048.17
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 2. cl=24059.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_D: bar 3 STATE2 RECOVERED. cl=24061.0 > BC=24048.17
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_C: bar 4 STATE3 RETEST UPDATED. lo=24057.0 ≈ TC=24056.5 r_high=24063.0
+2026-06-03 12:15:38,105 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 4. cl=24062.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,106 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:35:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,106 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 6/7
+2026-06-03 12:15:38,107 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,108 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,108 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,108 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 6 5m candles received.
+2026-06-03 12:15:38,108 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24065.0
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_C: bar 1 STATE3 RETEST UPDATED. lo=24052.0 ≈ TC=24056.5 r_high=24058.0
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_C: bar 2 STATE3 RETEST UPDATED. lo=24053.0 ≈ TC=24056.5 r_high=24060.0
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_C: bar 3 STATE3 RETEST UPDATED. lo=24055.0 ≈ TC=24056.5 r_high=24061.0
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 3. cl=24061.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,109 [INFO] CPR_System.Strategy: SETUP_C: bar 4 STATE3 RETEST UPDATED. lo=24057.0 ≈ TC=24056.5 r_high=24063.0
+2026-06-03 12:15:38,110 [INFO] CPR_System.Strategy: SETUP_D: bar 4 STATE2 RECOVERED. cl=24062.0 > BC=24048.17
+2026-06-03 12:15:38,110 [INFO] CPR_System.Strategy: SETUP_C: bar 5 STATE4 CONFIRMED. hi=24066.0 > r_high=24063.0
+2026-06-03 12:15:38,110 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 5. cl=24065.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,110 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:40:00+05:30 [TRADES_TODAY=0/2]
+2026-06-03 12:15:38,111 [INFO] CPR_System.Upstox: [MOCK] Advanced to bar 7/7
+2026-06-03 12:15:38,112 [INFO] CPR_System.Main: [MARKET_OPEN=True] Tick at 2026-06-03T17:45:38+05:30 (Wednesday, holiday=False)
+2026-06-03 12:15:38,112 [INFO] CPR_System.Main: [TRADES_TODAY=0/2] [DATA_SOURCE=SIMULATION]
+2026-06-03 12:15:38,112 [INFO] CPR_System.Main: [STRATEGY_ALLOWED=True] Fetching live candles.
+2026-06-03 12:15:38,113 [INFO] CPR_System.Main: [DATA_SOURCE=SIMULATION] 7 5m candles received.
+2026-06-03 12:15:38,113 [INFO] CPR_System.Main: [CMP_SOURCE=UPSTOX_LTP] Nifty LTP: 24067.0
+2026-06-03 12:15:38,113 [INFO] CPR_System.Strategy: SETUP_D: bar 0 STATE2 RECOVERED. cl=24054.0 > BC=24048.17
+2026-06-03 12:15:38,113 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 1. cl=24057.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,113 [INFO] CPR_System.Strategy: SETUP_D: bar 2 STATE2 RECOVERED. cl=24059.0 > BC=24048.17
+2026-06-03 12:15:38,113 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 3. cl=24061.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,113 [INFO] CPR_System.Strategy: SETUP_D: bar 4 STATE2 RECOVERED. cl=24062.0 > BC=24048.17
+2026-06-03 12:15:38,114 [INFO] CPR_System.Strategy: SETUP_D: RE-BROKEN 2→1 @ bar 5. cl=24065.0 > BC=24048.17 in State 2
+2026-06-03 12:15:38,114 [INFO] CPR_System.Strategy: SETUP_C: bar 6 ENTRY. hi=24068.0 > c_high=24066.0 entry=24067.0 SL=24054.0 TP=24083.67
+2026-06-03 12:15:38,114 [INFO] CPR_System.Strategy: SETUP_C: RESET 4→0 @ bar 6. Entry decision made
+2026-06-03 12:15:38,114 [INFO] CPR_System.Main: [LIVE] SETUP_C TRIGGERED | candle=2026-06-04T09:45:00+05:30 close=24067.0
+2026-06-03 12:15:38,117 [INFO] CPR_System.Risk: Risk check passes. Current trades today: 0/2. Realized P&L today: ₹0.00
+2026-06-03 12:15:38,118 [INFO] CPR_System.Main: [LIVE] Signal: SETUP_C BUY | Option=NIFTY26JUN0424050CE SL=24054.0 TP=24083.67
+2026-06-03 12:15:38,118 [WARNING] CPR_System.Telegram: Telegram Config Missing. Skip sending: 🔔 *SIGNAL DETECTED* 🔔
+
+*Setup:* `SETUP_C`
+*Details:* Entry a...
+2026-06-03 12:15:38,118 [WARNING] CPR_System.Telegram: Telegram signal notification failed for setup SETUP_C.
+2026-06-03 12:15:38,118 [INFO] CPR_System.Upstox: [PAPER ORDER] BUY 65 units of NIFTY26JUN0424050CE
+2026-06-03 12:15:38,132 [INFO] CPR_System.Risk: Registered Trade entry: ID 1 for SETUP_C - NIFTY26JUN0424050CE at avg entry price 1710.2
+2026-06-03 12:15:38,138 [INFO] CPR_System.Main: [TRADES_TODAY=2/2] Trade recorded: SETUP_C | NIFTY26JUN0424050CE
+2026-06-03 12:15:38,138 [WARNING] CPR_System.Telegram: Telegram Config Missing. Skip sending: 🟢 *ORDER PLACED (BUY)* 🟢
+
+*Setup:* `SETUP_C`
+*Details:* Opti...
+2026-06-03 12:15:38,138 [WARNING] CPR_System.Telegram: Telegram order placement notification failed for setup SETUP_C.
+2026-06-03 12:15:38,138 [INFO] CPR_System.Strategy: SETUP_D: bar 6 STATE2 RECOVERED. cl=24067.0 > BC=24048.17
+2026-06-03 12:15:38,139 [INFO] CPR_System.Main: [LIVE] Tick complete. candle=2026-06-04T09:45:00+05:30 [TRADES_TODAY=1/2]
+2026-06-03 12:15:38,139 [INFO] CPR_System.Upstox: [MOCK] No further mock bars to advance.
