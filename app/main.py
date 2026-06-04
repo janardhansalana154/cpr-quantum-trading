@@ -894,9 +894,54 @@ def reset_daily_state(db: Session = Depends(get_db)):
     state = db.query(DailyState).filter(DailyState.trade_date == today).first()
     if state:
         state.trade_count = 0
+        state.realized_pnl = 0.0
         state.is_blocked  = False
         db.commit()
     return {"status": "success", "message": f"Daily state reset for {today}."}
+
+
+@app.post("/api/reset-system")
+def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)):
+    """Reset strategy setups, daily risk state, and stored trades for a clean restart."""
+    if upstox is None:
+        raise HTTPException(status_code=503, detail="Server still initialising")
+
+    if not settings.MOCK_MODE and settings.TRADING_MODE == "live" and not force:
+        open_trade = db.query(Trade).filter(Trade.status == "OPEN").first()
+        if open_trade:
+            raise HTTPException(
+                status_code=400,
+                detail="Live position detected. Set force=true to reset anyway."
+            )
+
+    # Reset in-memory strategy state machines and CPR cache
+    for m in setups.values():
+        m.reset_state(0, "User reset")
+
+    global _today_cpr_levels, _cpr_date
+    _today_cpr_levels = None
+    _cpr_date = None
+
+    if hasattr(upstox, "_mock_bar_index"):
+        upstox._mock_bar_index = 1
+    if hasattr(upstox, "_build_mock_sequence"):
+        try:
+            upstox._mock_sequence = upstox._build_mock_sequence()
+        except Exception:
+            pass
+
+    deleted_trades = db.query(Trade).delete()
+    deleted_daily_states = db.query(DailyState).delete()
+    deleted_strategy_states = db.query(StrategyState).delete()
+    db.commit()
+
+    return {
+        "status": "success",
+        "message": "System reset complete.",
+        "deleted_trades": deleted_trades,
+        "deleted_daily_states": deleted_daily_states,
+        "deleted_strategy_states": deleted_strategy_states,
+    }
 
 
 @app.post("/api/mock/run")

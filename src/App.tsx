@@ -309,6 +309,26 @@ export default function App() {
     }
   };
 
+  const handleResetSystem = async () => {
+    if (!window.confirm("Reset system state, clear all stored trades, and restart daily P&L?")) {
+      return;
+    }
+    try {
+      const res = await fetch("/api/reset-system", { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text();
+        addLog("ERROR", `System reset failed: ${res.status} ${txt}`);
+        return;
+      }
+      const data = await res.json();
+      addLog("SUCCESS", `System reset complete. Trades cleared: ${data.deleted_trades || 0}.`);
+      fetchLiveStatus();
+      fetchLiveTrades();
+    } catch (e: any) {
+      addLog("ERROR", `System reset error: ${e?.message || e}`);
+    }
+  };
+
   const fetchLiveStatus = async () => {
     try {
       const res = await fetch("/api/status");
@@ -848,6 +868,9 @@ export default function App() {
                     Run Mock
                   </button>
                 )}
+                <button onClick={handleResetSystem} className="text-xs px-2 py-0.5 rounded bg-rose-600 text-white font-mono font-bold">
+                  Reset System
+                </button>
               </div>
             </div>
           </div>
