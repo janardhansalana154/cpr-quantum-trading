@@ -35,8 +35,8 @@ _IST = timezone(timedelta(hours=5, minutes=30))
 logger = logging.getLogger("CPR_System.Main")
 
 app = FastAPI(
-    title="CPR 4-Setup Automated Trading System",
-    description="Live Nifty 50 automated CPR strategy engine",
+    title="Nifty 50 CPR Option Trading Engine",
+    description="Live Nifty 50 CPR option strategy engine for Upstox deployment",
 )
 
 app.add_middleware(
@@ -637,6 +637,8 @@ def get_system_status(db: Session = Depends(get_db)):
             "loss_limit": settings.DAILY_LOSS_LIMIT,
             "lots": settings.POSITION_LOTS,
         },
+        "market_classification": _last_market_classification,
+        "last_signal": _last_strategy_signal,
     }
 
 
@@ -644,15 +646,7 @@ class AssistantQuery(BaseModel):
     question: str
 
 
-def _assistant_find_setup_states(setups: Dict[str, Any]) -> Dict[str, Any]:
-    armed = [name for name, data in setups.items() if data["state"] == 4]
-    retested = [name for name, data in setups.items() if data["state"] == 3]
-    recovered = [name for name, data in setups.items() if data["state"] == 2]
-    broken = [name for name, data in setups.items() if data["state"] == 1]
-    return {"armed": armed, "retested": retested, "recovered": recovered, "broken": broken}
-
-
-def _assistant_summary(status: Dict[str, Any], setups: Dict[str, Any]) -> str:
+def _assistant_summary(status: Dict[str, Any]) -> str:
     lines = [
         f"Market is {'OPEN' if status['market_open'] else 'CLOSED'}.",
         f"Data source: {status['data_source']}.",
@@ -662,21 +656,16 @@ def _assistant_summary(status: Dict[str, Any], setups: Dict[str, Any]) -> str:
     if status['cpr_levels']:
         cpr = status['cpr_levels']
         lines.append(f"Current CPR: R1={cpr['r1']}, TC={cpr['tc']}, BC={cpr['bc']}, S1={cpr['s1']}.")
-    state_info = _assistant_find_setup_states(setups)
-    if state_info['armed']:
-        lines.append(f"Armed setup(s): {', '.join(state_info['armed'])}.")
-    elif state_info['retested']:
-        lines.append(f"Retested but waiting for confirmation: {', '.join(state_info['retested'])}.")
-    elif state_info['recovered']:
-        lines.append(f"Recovered setups awaiting retest: {', '.join(state_info['recovered'])}.")
-    elif state_info['broken']:
-        lines.append(f"Breakouts detected but not yet retested: {', '.join(state_info['broken'])}.")
+    if status.get('market_classification'):
+        lines.append(f"Market classification: {status['market_classification']}.")
+    if status.get('last_signal'):
+        sig = status['last_signal']
+        lines.append(f"Latest signal: {sig['strategy_name']} {sig['trade_type']} at {sig['entry_price']}.")
     return " ".join(lines)
 
 
-def _assistant_answer_question(question: str, status: Dict[str, Any], setups: Dict[str, Any]) -> str:
+def _assistant_answer_question(question: str, status: Dict[str, Any]) -> str:
     q = question.strip().lower()
-    state_info = _assistant_find_setup_states(setups)
     if "why" in q and ("enter" in q or "entry" in q or "trade" in q):
         if not status['market_open']:
             return "No entry can occur while the market is closed. Wait until NSE opens at 09:15 IST and the engine will resume if Upstox remains authenticated."
@@ -687,16 +676,10 @@ def _assistant_answer_question(question: str, status: Dict[str, Any], setups: Di
                 return f"The system has already reached the daily trade limit ({status['daily_summary']['trade_count']}/{settings.MAX_DAILY_TRADES}), so no further entries are allowed today."
             if status['daily_summary']['is_blocked']:
                 return "Trading is blocked for the day by risk control. Restore the daily state to resume strategy execution."
-        if state_info['armed']:
-            armed = ", ".join(state_info['armed'])
-            return f"A trade is ready in {armed}. The system is waiting for a confirmation candle that triggers the entry price."
-        if state_info['retested']:
-            return f"The strategy has retested one or more levels: {', '.join(state_info['retested'])}. It is waiting for the next confirmation move to complete the setup."
-        if state_info['recovered']:
-            return f"A breakout has recovered inside the CPR and is waiting for a valid retest. Active recovered setups: {', '.join(state_info['recovered'])}."
-        if state_info['broken']:
-            return f"The system has at least one valid breakout, but it has not yet completed the recovery and retest sequence. Breakout setup(s): {', '.join(state_info['broken'])}."
-        return _assistant_summary(status, setups)
+        if status.get('last_signal'):
+            sig = status['last_signal']
+            return f"A pending signal exists: {sig['strategy_name']} {sig['trade_type']} at {sig['entry_price']}. SL={sig['stop_loss']}, TP={sig['take_profit']}."
+        return _assistant_summary(status)
 
     if "upstox" in q or "token" in q or "connected" in q:
         if status['data_source'] == 'DISCONNECTED':
@@ -710,20 +693,19 @@ def _assistant_answer_question(question: str, status: Dict[str, Any], setups: Di
     if "cpr" in q or "levels" in q or "r1" in q or "tc" in q or "bc" in q or "s1" in q:
         if status['cpr_levels']:
             cpr = status['cpr_levels']
-            return f"Current CPR levels are R1={cpr['r1']}, TC={cpr['tc']}, BC={cpr['bc']}, S1={cpr['s1']}."
+            return f"Current CPR levels are R1={cpr['r1']}, TC={cpr['tc']}, BC={cpr['bc']}, S1={cpr['s1']} ."
         return "CPR levels are not available right now because previous-day OHLC data is not loaded. Authenticate Upstox or wait for the next tick."
 
-    for setup_key in ['setup_a', 'setup_b', 'setup_c', 'setup_d']:
-        if setup_key in q:
-            key = setup_key.upper()
-            if key in setups:
-                s = setups[key]
-                return f"{key} is currently in state {s['state']} with reason: {s['last_reason']}."
+    if 'signal' in q or 'strategy' in q or 'entry' in q:
+        if status.get('last_signal'):
+            sig = status['last_signal']
+            return f"The latest strategy signal is {sig['strategy_name']} {sig['trade_type']} on {sig['option_type']} with entry {sig['entry_price']}, stop loss {sig['stop_loss']} and target {sig['take_profit']}."
+        return "No active entry signal is present at the moment. The engine is monitoring live CPR and will only take a trade when the signal conditions are met."
 
     if "help" in q or "rule" in q or "how" in q:
-        return _assistant_summary(status, setups)
+        return _assistant_summary(status)
 
-    return _assistant_summary(status, setups)
+    return _assistant_summary(status)
 
 
 @app.post("/api/assistant")
@@ -734,8 +716,7 @@ def assistant_endpoint(request: AssistantQuery, db: Session = Depends(get_db)):
     if upstox is None:
         return {"question": question, "answer": "Server is still starting. Try again in a few seconds."}
     status = get_system_status(db)
-    setups_state = get_active_setups()
-    answer = _assistant_answer_question(question, status, setups_state)
+    answer = _assistant_answer_question(question, status)
     return {"question": question, "answer": answer}
 
 
@@ -751,21 +732,8 @@ def health_check():
 
 @app.get("/api/setups")
 def get_active_setups():
-    return {
-        name: {
-            "state": m.state,
-            "state_bar": m.state_bar,
-            "elapsed_bars": m.bars_elapsed(m.state_bar),
-            "retest_high": m.r_high,
-            "retest_low": m.r_low,
-            "confirmation_high": m.c_high,
-            "confirmation_low": m.c_low,
-            "last_reason": m.last_reason,
-            "configs": {"fail_win": m.fail_win, "ret_win": m.ret_win,
-                        "con_win": m.con_win, "ent_win": m.ent_win, "ret_tol": m.ret_tol},
-        }
-        for name, m in setups.items()
-    }
+    # Legacy setup state machines removed — endpoint retained for compatibility.
+    return {"setups": {}}
 
 
 @app.get("/api/trades")
@@ -946,12 +914,7 @@ def update_config(data: dict, db: Session = Depends(get_db)):
     if "trading_mode" in data and data["trading_mode"] in ("paper","live"):
         settings.TRADING_MODE = data["trading_mode"]
 
-    for m in setups.values():
-        m.fail_win = settings.FAILURE_WINDOW
-        m.ret_win  = settings.RETEST_WINDOW
-        m.con_win  = settings.CONFIRMATION_WINDOW
-        m.ent_win  = settings.ENTRY_TRIGGER_WINDOW
-        m.ret_tol  = settings.RETEST_TOLERANCE
+    # Legacy in-memory setup state machines removed; no in-memory updates required.
 
     return {"status": "success", "message": "Config updated."}
 
@@ -966,9 +929,15 @@ def get_config():
 
 @app.post("/api/reset-strategy")
 def reset_strategy_states():
-    for m in setups.values():
-        m.reset_state(0, "User reset")
-    return {"status": "success", "message": "All setups reset to IDLE."}
+    # Legacy in-memory setup machines removed — reset persisted strategy states instead
+    from database.db import SessionLocal
+    db = SessionLocal()
+    try:
+        deleted = db.query(StrategyState).delete()
+        db.commit()
+        return {"status": "success", "message": "All persisted strategy states reset.", "deleted": deleted}
+    finally:
+        db.close()
 
 
 @app.post("/api/reset-daily")
@@ -998,9 +967,7 @@ def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)
                 detail="Live position detected. Set force=true to reset anyway."
             )
 
-    # Reset in-memory strategy state machines and CPR cache
-    for m in setups.values():
-        m.reset_state(0, "User reset")
+    # Legacy in-memory strategy state machines removed; nothing to reset in-memory
 
     global _today_cpr_levels, _cpr_date
     _today_cpr_levels = None
