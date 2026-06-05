@@ -16,7 +16,11 @@ from typing import List, Dict, Optional, Any
 import logging
 
 from config.settings import settings
-from strategies.nifty_cpr_option_strategy import calculate_cpr_levels, find_trade_signal
+from strategies.nifty_cpr_option_strategy import (
+    calculate_cpr_levels,
+    find_trade_signal,
+    get_previous_cpr_widths,
+)
 
 logger = logging.getLogger("CPR_System.Backtest")
 
@@ -182,6 +186,14 @@ def run_backtest(
         pdh = prev_ohlc["high"]
         pdl = prev_ohlc["low"]
         pdc = prev_ohlc["close"]
+
+        # Compute average CPR width (used for market classification in strategy)
+        widths = get_previous_cpr_widths(upstox_client, trading_date)
+        if not widths:
+            logger.warning(f"[BACKTEST] Unable to compute avg CPR width for {trading_date} — skipping.")
+            skipped_days.append(str(trading_date))
+            continue
+        avg_width = sum(widths) / len(widths)
 
         candles = upstox_client.get_nifty_historical_5m_for_day(trading_date)
         if not candles:
