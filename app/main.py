@@ -15,7 +15,13 @@ from database.db import get_db, init_db
 from database.models import Trade, DailyState, StrategyState
 from brokers.upstox_client import UpstoxClient, is_market_open, get_market_status_detail
 from risk.manager import RiskManager
-from strategies.cpr_strategy import calculate_cpr_levels, is_inside_cpr, SetupStateMachine, CPRLevels
+from strategies.nifty_cpr_option_strategy import (
+    CPRLevels,
+    calculate_cpr_levels,
+    classify_cpr_width,
+    find_trade_signal,
+    get_previous_cpr_widths,
+)
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
 from telegram.bot import send_telegram_message
 
@@ -43,19 +49,17 @@ app.add_middleware(
 
 upstox: Optional[UpstoxClient] = None
 
-setups = {
-    "SETUP_A": SetupStateMachine("SETUP_A"),
-    "SETUP_B": SetupStateMachine("SETUP_B"),
-    "SETUP_C": SetupStateMachine("SETUP_C"),
-    "SETUP_D": SetupStateMachine("SETUP_D"),
-}
-
 _today_cpr_levels: Optional[CPRLevels] = None
 _cpr_date: Optional[str] = None
+_previous_day_ohlc: Optional[Dict[str, float]] = None
+_today_cpr_width: Optional[float] = None
+_cpr_width_date: Optional[str] = None
+_last_strategy_signal: Optional[Dict[str, Any]] = None
+_last_market_classification: Optional[str] = None
 
 
 def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
-    global _today_cpr_levels, _cpr_date
+    global _today_cpr_levels, _cpr_date, _previous_day_ohlc
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
 
     if _today_cpr_levels is not None and _cpr_date == today_str:
@@ -64,6 +68,7 @@ def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
     prev = upstox.get_previous_day_ohlc() if upstox else None
     if prev:
         _today_cpr_levels = calculate_cpr_levels(prev["high"], prev["low"], prev["close"])
+        _previous_day_ohlc = prev
         _cpr_date = today_str
         logger.info(
             f"[LIVE] CPR computed: Pivot={_today_cpr_levels.pivot:.2f} "
@@ -72,9 +77,39 @@ def get_today_cpr_levels(db: Session) -> Optional[CPRLevels]:
         )
     else:
         _today_cpr_levels = None
+        _previous_day_ohlc = None
         _cpr_date = today_str
         logger.warning("[DATA_SOURCE=DISCONNECTED] CPR levels unavailable — authenticate Upstox.")
     return _today_cpr_levels
+
+
+def get_previous_cpr_levels(days_back: int = 2) -> Optional[CPRLevels]:
+    if upstox is None:
+        return None
+    target_date = datetime.now(_IST).date() - timedelta(days=days_back - 1)
+    prev = upstox.get_previous_day_ohlc_for_date(target_date)
+    if prev:
+        return calculate_cpr_levels(prev["high"], prev["low"], prev["close"])
+    return None
+
+
+def get_average_cpr_width(db: Session) -> Optional[float]:
+    global _today_cpr_width, _cpr_width_date
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    if _today_cpr_width is not None and _cpr_width_date == today_str:
+        return _today_cpr_width
+
+    if upstox is None:
+        return None
+
+    widths = get_previous_cpr_widths(upstox, datetime.now(_IST).date())
+    if not widths:
+        logger.warning("[CPR] Unable to compute historical CPR widths for classification.")
+        return None
+
+    _today_cpr_width = sum(widths) / len(widths)
+    _cpr_width_date = today_str
+    return _today_cpr_width
 
 
 @app.on_event("startup")
@@ -246,10 +281,7 @@ def check_active_position_targets():
         rm_check = RiskManager(db)
         day_state = rm_check.get_or_create_daily_state()
         qty = open_trade.lots * settings.NIFTY_LOT_SIZE
-        if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
-            unrealised = (option_price - open_trade.entry_price) * qty
-        else:
-            unrealised = (open_trade.entry_price - option_price) * qty
+        unrealised = (option_price - open_trade.entry_price) * qty
         total_day_pnl = day_state.realized_pnl + unrealised
         if total_day_pnl <= -settings.DAILY_LOSS_LIMIT:
             upstox.place_order(open_trade.option_symbol, "SELL", open_trade.lots, paper=open_trade.is_paper)
@@ -262,16 +294,39 @@ def check_active_position_targets():
                 notify_sl_hit(open_trade.setup_name, open_trade.option_symbol, abs(closed.pnl), total_day_pnl)
             return
 
-        # Trigger SL/TP based on option premium levels (stored as option prices)
-        is_sl = is_tp = False
-        if open_trade.setup_name in ["SETUP_B", "SETUP_C"]:
-            is_sl = option_price <= open_trade.stop_loss
-            is_tp = option_price >= open_trade.take_profit
-        else:
-            is_sl = option_price >= open_trade.stop_loss
-            is_tp = option_price <= open_trade.take_profit
+        is_sl = option_price <= open_trade.stop_loss
+        is_tp = option_price >= open_trade.take_profit
 
         if not (is_sl or is_tp):
+            # Move stop loss to break-even at 1:1 reward:risk
+            risk = abs(open_trade.entry_price - open_trade.stop_loss)
+            if risk > 0 and option_price >= open_trade.entry_price + risk:
+                if open_trade.stop_loss < open_trade.entry_price:
+                    open_trade.stop_loss = open_trade.entry_price
+                    db.commit()
+                    logger.info(
+                        f"[TRAILING] Trade {open_trade.id} SL moved to break-even at {open_trade.entry_price:.2f}"
+                    )
+
+            # Optional aggressive trailing based on the prior completed 5m candle
+            try:
+                recent_candles = upstox.get_nifty_ohlc_5m()
+                if len(recent_candles) >= 2:
+                    prior = recent_candles[-2]
+                    if open_trade.trade_type == "BUY" and prior["low"] > open_trade.stop_loss:
+                        open_trade.stop_loss = prior["low"]
+                        db.commit()
+                        logger.info(
+                            f"[TRAILING] Trade {open_trade.id} SL trailed to prior candle low {prior['low']:.2f}"
+                        )
+                    elif open_trade.trade_type == "SELL" and prior["high"] < open_trade.stop_loss:
+                        open_trade.stop_loss = prior["high"]
+                        db.commit()
+                        logger.info(
+                            f"[TRAILING] Trade {open_trade.id} SL trailed to prior candle high {prior['high']:.2f}"
+                        )
+            except Exception as e:
+                logger.debug(f"Trailing stop update failed: {e}")
             return
 
         exit_status = "CLOSED_SL" if is_sl else "CLOSED_TP"
@@ -361,104 +416,133 @@ def monitor_interval_tick(force_market_open: bool = False):
             logger.warning("[DATA_SOURCE=DISCONNECTED] CPR levels unavailable — tick skipped.")
             return
 
+        yesterday_levels = get_previous_cpr_levels(days_back=2)
+        if yesterday_levels is None:
+            logger.warning("[LIVE] Yesterday's CPR levels unavailable — cannot compare CPR direction.")
+            return
+
+        avg_width = get_average_cpr_width(db)
+        if avg_width is None:
+            logger.warning("[LIVE] CPR width average unavailable — cannot classify market.")
+            return
+
+        global _last_market_classification, _last_strategy_signal
+        _last_market_classification = classify_cpr_width(levels.width, avg_width)
+        _last_strategy_signal = None
+
+        prev_ohlc = _previous_day_ohlc or upstox.get_previous_day_ohlc()
+        if not prev_ohlc:
+            logger.warning("[LIVE] Previous-day OHLC unavailable — cannot calculate PDH/PDL.")
+            return
+
+        pdh = prev_ohlc["high"]
+        pdl = prev_ohlc["low"]
+        pdc = prev_ohlc["close"]
+
         ltp = upstox.get_nifty_price()
         cmp_src = "UPSTOX_LTP" if ltp is not None else "UNAVAILABLE"
         logger.info(f"[CMP_SOURCE={cmp_src}] Nifty LTP: {ltp}")
 
-        for i, candle in enumerate(candles):
-            is_latest = (i == len(candles) - 1)
-            for name, machine in setups.items():
-                triggered, details = machine.update(candle, i, levels)
-                if not (triggered and is_latest):
-                    continue
+        signal = find_trade_signal(candles, levels, yesterday_levels, avg_width, pdh, pdl)
+        if signal is None:
+            logger.info("[LIVE] No actionable signal found this tick.")
+            _last_processed_candle_time = latest_time
+            return
 
-                logger.info(f"[LIVE] {name} TRIGGERED | candle={latest_time} close={latest['close']}")
+        _last_strategy_signal = signal.dict()
 
-                if settings.MOCK_MODE and latest.get("time"):
-                    try:
-                        _now_ist = datetime.fromisoformat(latest["time"])
-                        if _now_ist.tzinfo is None:
-                            _now_ist = _now_ist.replace(tzinfo=_IST)
-                        else:
-                            _now_ist = _now_ist.astimezone(_IST)
-                    except Exception:
-                        _now_ist = datetime.now(_IST)
+        if settings.MOCK_MODE and latest.get("time"):
+            try:
+                _now_ist = datetime.fromisoformat(latest["time"])
+                if _now_ist.tzinfo is None:
+                    _now_ist = _now_ist.replace(tzinfo=_IST)
                 else:
-                    _now_ist = datetime.now(_IST)
+                    _now_ist = _now_ist.astimezone(_IST)
+            except Exception:
+                _now_ist = datetime.now(_IST)
+        else:
+            _now_ist = datetime.now(_IST)
 
-                _cutoff  = _now_ist.replace(
-                    hour=settings.NO_ENTRY_AFTER_HOUR,
-                    minute=settings.NO_ENTRY_AFTER_MIN,
-                    second=0, microsecond=0
-                )
-                if _now_ist >= _cutoff:
-                    logger.warning(
-                        f"[TIME CUTOFF] {name} signal at {_now_ist.strftime('%H:%M IST')} "
-                        f"rejected — no new entries after "
-                        f"{settings.NO_ENTRY_AFTER_HOUR:02d}:{settings.NO_ENTRY_AFTER_MIN:02d} IST."
-                    )
-                    continue
+        _cutoff = _now_ist.replace(
+            hour=settings.NO_ENTRY_AFTER_HOUR,
+            minute=settings.NO_ENTRY_AFTER_MIN,
+            second=0, microsecond=0,
+        )
+        if _now_ist >= _cutoff:
+            logger.warning(
+                f"[TIME CUTOFF] {signal.strategy_name} signal at {_now_ist.strftime('%H:%M IST')} "
+                f"rejected — no new entries after "
+                f"{settings.NO_ENTRY_AFTER_HOUR:02d}:{settings.NO_ENTRY_AFTER_MIN:02d} IST."
+            )
+            return
 
-                if not rm.can_trade():
-                    continue
+        if not rm.can_trade():
+            logger.info("[RISK] New entries blocked by risk management.")
+            return
 
-                daily_now = rm.get_or_create_daily_state()
-                if daily_now.trade_count >= settings.MAX_DAILY_TRADES:
-                    logger.warning(
-                        f"[STRATEGY_ALLOWED=False] Limit hit ({daily_now.trade_count}/"
-                        f"{settings.MAX_DAILY_TRADES}) — aborting order."
-                    )
-                    return
+        if daily.trade_count >= settings.MAX_DAILY_TRADES:
+            logger.warning(
+                f"[STRATEGY_ALLOWED=False] Limit hit ({daily.trade_count}/{settings.MAX_DAILY_TRADES}) — aborting order."
+            )
+            return
 
-                opt_sym, strike, opt_type = upstox.select_atm_option(
-                    candle["close"], details["trade_type"]
-                )
+        option_symbol, strike, option_type = upstox.select_atm_option(latest["close"], signal.trade_type)
+        option_price = upstox.get_option_ltp(option_symbol)
+        if option_price is None:
+            logger.warning(f"[OPTION FILTER] No LTP available for {option_symbol}. Signal rejected.")
+            _last_processed_candle_time = latest_time
+            return
+        if option_price < 100:
+            logger.warning(
+                f"[OPTION FILTER] ATM premium for {option_symbol} is ₹{option_price:.2f} < ₹100. Rejecting trade."
+            )
+            _last_processed_candle_time = latest_time
+            return
+
+        logger.info(
+            f"[LIVE] Signal: {signal.strategy_name} {signal.trade_type} | "
+            f"Option={option_symbol} price={option_price:.2f} "
+            f"SL={signal.stop_loss:.2f} TP={signal.take_profit:.2f}"
+        )
+        notify_signal_detected(signal.strategy_name, f"Entry at {latest['close']}. Buying {option_symbol}.")
+
+        order = upstox.place_order(
+            option_symbol,
+            "BUY",
+            settings.POSITION_LOTS,
+            paper=(settings.TRADING_MODE == "paper"),
+        )
+        if order["status"] == "success":
+            rec = rm.register_trade_entry(
+                setup_name=signal.strategy_name,
+                trade_type=signal.trade_type,
+                option_symbol=option_symbol,
+                strike=strike,
+                option_type=option_type,
+                entry_price=order["avg_price"],
+                is_paper=(settings.TRADING_MODE == "paper"),
+            )
+            if rec:
+                rec.stop_loss = signal.stop_loss
+                rec.take_profit = signal.take_profit
+                db.commit()
                 logger.info(
-                    f"[LIVE] Signal: {name} {details['trade_type']} | "
-                    f"Option={opt_sym} SL={details['stop_loss']} TP={details['take_profit']}"
+                    f"[TRADES_TODAY={daily.trade_count + 1}/{settings.MAX_DAILY_TRADES}] "
+                    f"Trade recorded: {signal.strategy_name} | {option_symbol} @ {order['avg_price']:.2f} "
+                    f"(SL={rec.stop_loss:.2f} TP={rec.take_profit:.2f})"
                 )
-                notify_signal_detected(name, f"Entry at {candle['close']}. Buying {opt_sym}.")
-
-                order = upstox.place_order(
-                    opt_sym, "BUY", details["lots"],
-                    paper=(settings.TRADING_MODE == "paper"),
-                )
-                if order["status"] == "success":
-                    rec = rm.register_trade_entry(
-                        setup_name=name, trade_type=details["trade_type"],
-                        option_symbol=opt_sym, strike=strike, option_type=opt_type,
-                        entry_price=order["avg_price"],
-                        is_paper=(settings.TRADING_MODE == "paper"),
-                    )
-                    if rec:
-                        # Store SL/TP as option premium levels (not index levels).
-                        entry_premium = float(order.get("avg_price") or 0.0)
-                        # Use SL_BUFFER as premium buffer (rupee points) and REWARD_RATIO for TP calculation
-                        if details["trade_type"] == "SELL":
-                            premium_sl = round(entry_premium + settings.SL_BUFFER, 2)
-                            premium_tp = round(max(0.01, entry_premium - (settings.REWARD_RATIO * settings.SL_BUFFER)), 2)
-                        else:
-                            premium_sl = round(max(0.01, entry_premium - settings.SL_BUFFER), 2)
-                            premium_tp = round(entry_premium + (settings.REWARD_RATIO * settings.SL_BUFFER), 2)
-
-                        rec.stop_loss = premium_sl
-                        rec.take_profit = premium_tp
-                        db.commit()
-                        logger.info(
-                            f"[TRADES_TODAY={daily_now.trade_count+1}/{settings.MAX_DAILY_TRADES}] "
-                            f"Trade recorded: {name} | {opt_sym} @ {entry_premium:.2f} (SL={premium_sl} TP={premium_tp})"
-                        )
-                    notify_order_placed(
-                        setup=name, buy_sell="BUY",
-                        details=(
-                            f"Option: `{opt_sym}`\nLots: `1`\n"
-                            f"Premium: `₹{order['avg_price']:.2f}`\n"
-                            f"SL: `₹{(rec.stop_loss if rec else 0):.2f}`\n"
-                            f"TP: `₹{(rec.take_profit if rec else 0):.2f}`"
-                        ),
-                    )
-                else:
-                    notify_system_error(f"Order failed for {name}: {order['message']}")
+            notify_order_placed(
+                setup=signal.strategy_name,
+                buy_sell="BUY",
+                details=(
+                    f"Option: `{option_symbol}`\nLots: `{settings.POSITION_LOTS}`\n"
+                    f"Premium: `₹{order['avg_price']:.2f}`\n"
+                    f"SL: `₹{rec.stop_loss if rec else signal.stop_loss:.2f}`\n"
+                    f"TP: `₹{rec.take_profit if rec else signal.take_profit:.2f}`"
+                ),
+            )
+        else:
+            notify_system_error(f"Order failed for {signal.strategy_name}: {order['message']}")
 
         _last_processed_candle_time = latest_time
         logger.info(
