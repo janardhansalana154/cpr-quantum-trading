@@ -145,6 +145,9 @@ export default function App() {
   const [speedMs, setSpeedMs] = useState(1500);
   const [currentIdx, setCurrentIdx] = useState(0);
   const [currentTime, setCurrentTime] = useState("--:--:--");
+  const [liveCandles, setLiveCandles] = useState<Candle[]>([]);
+  const [liveCandlesLoading, setLiveCandlesLoading] = useState(false);
+  const [forceTradeLoading, setForceTradeLoading] = useState(false);
 
   const [upstoxStatus, setUpstoxStatus] = useState({
     connected: false,
@@ -352,6 +355,8 @@ export default function App() {
           market_detail: data.market_detail || prev.market_detail,
           daily_summary: data.daily_summary || prev.daily_summary,
           strategy_allowed: data.strategy_allowed ?? prev.strategy_allowed,
+          market_classification: data.market_classification || prev.market_classification,
+          last_signal: data.last_signal || prev.last_signal,
         }));
         if (data.cpr_levels) setCprLevels(data.cpr_levels);
         if (data.trading_mode) setTradingMode(data.trading_mode);
@@ -359,6 +364,46 @@ export default function App() {
       }
     } catch {
       // backend unreachable — keep stale state
+    }
+  };
+
+  const fetchLiveCandles = async () => {
+    setLiveCandlesLoading(true);
+    try {
+      const res = await fetch("/api/live/candles");
+      if (res.ok) {
+        const data = await res.json();
+        setLiveCandles(data.candles || []);
+      }
+    } catch {
+      // ignore failures
+    } finally {
+      setLiveCandlesLoading(false);
+    }
+  };
+
+  const handleForceMockTrade = async () => {
+    if (!mockMode) {
+      addLog("WARNING", "Enable mock mode before forcing a trade.");
+      return;
+    }
+    setForceTradeLoading(true);
+    try {
+      const res = await fetch("/api/mock/run?force=true", { method: "POST" });
+      if (!res.ok) {
+        const txt = await res.text();
+        addLog("ERROR", `Force trade failed: ${res.status} ${txt}`);
+        return;
+      }
+      const data = await res.json();
+      addLog("SUCCESS", `Force trade executed. Trade count ${data.trade_count_after}/${data.mock_total_bars}.`);
+      fetchLiveStatus();
+      fetchLiveTrades();
+      fetchLiveCandles();
+    } catch (e: any) {
+      addLog("ERROR", `Force trade network error: ${e?.message || e}`);
+    } finally {
+      setForceTradeLoading(false);
     }
   };
 
@@ -712,11 +757,14 @@ export default function App() {
 
     window.addEventListener("message", handleMsg);
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    const candlesTimer = setInterval(fetchLiveCandles, 15_000);
+    fetchLiveCandles();
     return () => {
       window.removeEventListener("message", handleMsg);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       clearInterval(liveTimer);
       clearInterval(tradesTimer);
+      clearInterval(candlesTimer);
       stopAuthPopupMonitor();
     };
   }, []);
@@ -822,9 +870,15 @@ export default function App() {
                   {mockMode ? "Mock ON" : "Mock OFF"}
                 </button>
                 {mockMode && (
-                  <button onClick={handleRunMockTick} className="text-xs px-2 py-0.5 rounded bg-amber-600 text-slate-900 font-mono font-bold">
-                    Run Mock
-                  </button>
+                  <>
+                    <button onClick={handleRunMockTick} className="text-xs px-2 py-0.5 rounded bg-amber-600 text-slate-900 font-mono font-bold">
+                      Run Mock
+                    </button>
+                    <button onClick={handleForceMockTrade} disabled={forceTradeLoading}
+                      className={`text-xs px-2 py-0.5 rounded ${forceTradeLoading ? "bg-slate-700 text-slate-300" : "bg-cyan-600 text-slate-900"} font-mono font-bold`}>
+                      {forceTradeLoading ? "Trading…" : "Force Trade"}
+                    </button>
+                  </>
                 )}
                 <button onClick={handleResetSystem} className="text-xs px-2 py-0.5 rounded bg-rose-600 text-white font-mono font-bold">
                   Reset System
@@ -1063,6 +1117,33 @@ export default function App() {
                     ))}
                   </div>
                   <p className="mt-4 text-sm leading-relaxed text-slate-400">Levels are computed from previous-day OHLC and used by the strategy to determine entry bias, option type selection, and risk limits.</p>
+                </div>
+
+                <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Live chart</p>
+                      <h3 className="text-lg font-bold text-white">Nifty 5m Price</h3>
+                    </div>
+                    <span className="text-[10px] uppercase font-bold px-2 py-1 rounded bg-slate-800 text-slate-400">Live</span>
+                  </div>
+                  {liveCandles.length > 0 ? (
+                    <div className="w-full h-[260px]">
+                      <ResponsiveContainer width="100%" height={260}>
+                        <ComposedChart data={liveCandles}>
+                          <CartesianGrid stroke="#334155" strokeDasharray="3 3" />
+                          <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 10 }} tickLine={false} axisLine={false} />
+                          <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} tickLine={false} axisLine={false} domain={["dataMin", "dataMax"]} />
+                          <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} formatter={(value: number) => `₹${value.toFixed(2)}`} />
+                          <Line type="monotone" dataKey="close" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  ) : (
+                    <div className="rounded-2xl bg-slate-900/70 p-4 text-slate-500 text-sm">
+                      Live candles unavailable. Connect Upstox or enable mock mode to stream current 5m data.
+                    </div>
+                  )}
                 </div>
               </div>
 

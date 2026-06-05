@@ -168,6 +168,21 @@ def run_backtest(
 
         levels = calculate_cpr_levels(prev_ohlc["high"], prev_ohlc["low"], prev_ohlc["close"])
 
+        # CPR levels for the trading day (based on previous-day OHLC)
+        # Also load the 'yesterday' CPR (day before previous) for pivot direction comparison
+        prev_prev_date = trading_date - timedelta(days=1)
+        prev_prev_ohlc = upstox_client.get_previous_day_ohlc_for_date(prev_prev_date)
+        if not prev_prev_ohlc:
+            logger.warning(f"[BACKTEST] No prev-prev OHLC for {trading_date} — skipping.")
+            skipped_days.append(str(trading_date))
+            continue
+        yesterday_levels = calculate_cpr_levels(prev_prev_ohlc["high"], prev_prev_ohlc["low"], prev_prev_ohlc["close"])
+
+        # PDH / PDL for the day are taken from the prev_ohlc we fetched above
+        pdh = prev_ohlc["high"]
+        pdl = prev_ohlc["low"]
+        pdc = prev_ohlc["close"]
+
         candles = upstox_client.get_nifty_historical_5m_for_day(trading_date)
         if not candles:
             logger.warning(f"[BACKTEST] No candles for {trading_date} — skipping.")

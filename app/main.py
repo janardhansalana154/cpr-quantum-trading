@@ -22,6 +22,7 @@ from strategies.nifty_cpr_option_strategy import (
     find_trade_signal,
     get_previous_cpr_widths,
 )
+from strategies.nifty_cpr_option_strategy import calculate_ema
 from telegram.bot import notify_signal_detected, notify_order_placed, notify_sl_hit, notify_tp_hit, notify_system_error
 from telegram.bot import send_telegram_message
 
@@ -988,11 +989,71 @@ def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)
     }
 
 
+def execute_forced_mock_trade(db: Session, latest: dict, latest_time: str) -> dict:
+    if not settings.MOCK_MODE:
+        raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
+
+    rm = RiskManager(db)
+    trade_type = "BUY"
+    if _last_market_classification == "BEARISH":
+        trade_type = "SELL"
+
+    option_symbol, strike, option_type = upstox.select_atm_option(latest["close"], trade_type)
+    order = upstox.place_order(option_symbol, "BUY", settings.POSITION_LOTS, paper=True)
+    avg_price = float(order.get("avg_price", 0.0))
+    stop_loss = round(max(1.0, avg_price * 0.85), 2)
+    take_profit = round(max(stop_loss + 1.0, avg_price * 1.25), 2)
+
+    record = rm.register_trade_entry(
+        setup_name="FORCED_MOCK_TRADE",
+        trade_type=trade_type,
+        option_symbol=option_symbol,
+        strike=strike,
+        option_type=option_type,
+        entry_price=avg_price,
+        is_paper=True,
+    )
+    if record:
+        record.stop_loss = stop_loss
+        record.take_profit = take_profit
+        db.commit()
+
+    notify_signal_detected("FORCED_MOCK_TRADE", f"Forced entry at {latest.get('close')}. Buying {option_symbol}.")
+    notify_order_placed(
+        setup="FORCED_MOCK_TRADE",
+        buy_sell="BUY",
+        details=(
+            f"Option: `{option_symbol}`\nLots: `{settings.POSITION_LOTS}`\n"
+            f"Premium: `₹{avg_price:.2f}`\n"
+            f"SL: `₹{stop_loss:.2f}`\n"
+            f"TP: `₹{take_profit:.2f}`"
+        ),
+    )
+
+    global _last_strategy_signal
+    _last_strategy_signal = {
+        "strategy_name": "FORCED_MOCK_TRADE",
+        "trade_type": trade_type,
+        "option_type": option_type,
+        "entry_price": avg_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "strike_price": strike,
+    }
+
+    return {
+        "status": order.get("status", "success"),
+        "option_symbol": option_symbol,
+        "entry_price": avg_price,
+        "stop_loss": stop_loss,
+        "take_profit": take_profit,
+        "force_trade": True,
+    }
+
+
 @app.post("/api/mock/run")
-def run_mock_tick():
-    """Trigger a single strategy tick when Mock Mode is enabled (dashboard button).
-    This runs the same code path as the scheduled monitor_interval_tick but synchronously.
-    """
+def run_mock_tick(force: bool = Query(False)):
+    """Trigger a single strategy tick when Mock Mode is enabled (dashboard button)."""
     if not settings.MOCK_MODE:
         raise HTTPException(status_code=400, detail="Mock mode not enabled on server.")
 
@@ -1000,16 +1061,32 @@ def run_mock_tick():
     from database.models import DailyState
 
     today = date.today().strftime("%Y-%m-%d")
-    db = SessionLocal()
+    before_db = SessionLocal()
     try:
-        before_state = db.query(DailyState).filter(DailyState.trade_date == today).first()
+        before_state = before_db.query(DailyState).filter(DailyState.trade_date == today).first()
         before_count = before_state.trade_count if before_state else 0
     finally:
-        db.close()
+        before_db.close()
 
     processed_bar_index = getattr(upstox, "_mock_bar_index", 1)
+    trades_added = 0
+    forced_result = None
     try:
-        monitor_interval_tick(force_market_open=True)
+        if force:
+            db = SessionLocal()
+            try:
+                candles = upstox.get_nifty_ohlc_5m() or []
+                if not candles:
+                    raise HTTPException(status_code=400, detail="No mock candles available to force a trade.")
+                latest = candles[-1]
+                forced_result = execute_forced_mock_trade(db, latest, latest.get("time", ""))
+                trades_added = 1 if forced_result.get("status") == "success" else 0
+            finally:
+                db.close()
+        else:
+            monitor_interval_tick(force_market_open=True)
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -1018,14 +1095,14 @@ def run_mock_tick():
     else:
         has_advanced = False
 
-    db = SessionLocal()
+    after_db = SessionLocal()
     try:
-        after_state = db.query(DailyState).filter(DailyState.trade_date == today).first()
+        after_state = after_db.query(DailyState).filter(DailyState.trade_date == today).first()
         after_count = after_state.trade_count if after_state else 0
     finally:
-        db.close()
+        after_db.close()
 
-    return {
+    response = {
         "status": "success",
         "message": "Mock tick executed.",
         "trade_count_before": before_count,
@@ -1036,6 +1113,10 @@ def run_mock_tick():
         "mock_total_bars": len(getattr(upstox, "_mock_sequence", [])),
         "mock_advanced": has_advanced,
     }
+    if force:
+        response["force_trade"] = True
+        response["force_details"] = forced_result
+    return response
 
 
 @app.get("/health")
@@ -1059,6 +1140,26 @@ def upstox_session_status(request: Request):
     return status
 
 
+@app.get("/api/live/candles")
+def get_live_candles(limit: int = Query(20, ge=1, le=100)):
+    if upstox is None:
+        raise HTTPException(status_code=503, detail="Server still initialising")
+
+    candles = upstox.get_nifty_ohlc_5m() or []
+    clean = [
+        {
+            "time": c.get("time", ""),
+            "open": c.get("open", 0.0),
+            "high": c.get("high", 0.0),
+            "low": c.get("low", 0.0),
+            "close": c.get("close", 0.0),
+            "index": idx,
+        }
+        for idx, c in enumerate(candles[-limit:])
+    ]
+    return {"candles": clean}
+
+
 @app.get("/api/debug/cpr")
 def debug_cpr(date: Optional[date] = Query(None, description="Target trading date YYYY-MM-DD")):
     if upstox is None:
@@ -1074,6 +1175,50 @@ def debug_cpr(date: Optional[date] = Query(None, description="Target trading dat
 
     levels = calculate_cpr_levels(prev["high"], prev["low"], prev["close"])
     return {"previous_ohlc": prev, "cpr_levels": levels.dict()}
+
+
+@app.get("/api/debug/signal-inspect")
+def debug_signal_inspect(db: Session = Depends(get_db)):
+    """Return the current inputs used for signal detection and the resulting signal (if any).
+    Useful for debugging why the engine is not generating trades in mock/live modes.
+    """
+    if upstox is None:
+        raise HTTPException(status_code=503, detail="Server still initialising")
+
+    levels = get_today_cpr_levels(db)
+    if levels is None:
+        raise HTTPException(status_code=400, detail="CPR levels unavailable")
+
+    yesterday_levels = get_previous_cpr_levels(days_back=2)
+    if yesterday_levels is None:
+        raise HTTPException(status_code=400, detail="Yesterday CPR levels unavailable")
+
+    avg_width = get_average_cpr_width(db)
+    candles = upstox.get_nifty_ohlc_5m() or []
+    prev_ohlc = upstox.get_previous_day_ohlc() or {}
+    pdh = prev_ohlc.get("high")
+    pdl = prev_ohlc.get("low")
+
+    closes = [c.get("close") for c in candles if "close" in c]
+    ema20 = calculate_ema(closes, 20)
+
+    signal = None
+    try:
+        signal = find_trade_signal(candles, levels, yesterday_levels, avg_width or 0.0, pdh or 0.0, pdl or 0.0)
+    except Exception as e:
+        logger.exception("Signal inspect error")
+
+    return {
+        "candles_count": len(candles),
+        "last_close": closes[-1] if closes else None,
+        "ema20": ema20,
+        "avg_width": avg_width,
+        "cpr_levels": levels.dict() if levels else None,
+        "yesterday_levels": yesterday_levels.dict() if yesterday_levels else None,
+        "pdh": pdh,
+        "pdl": pdl,
+        "signal": signal.dict() if signal else None,
+    }
 
 
 @app.get("/api/report/historical")
