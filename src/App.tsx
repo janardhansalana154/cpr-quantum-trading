@@ -4,7 +4,7 @@ import {
   Terminal, Settings2, Bell, AlertTriangle,
   CheckCircle, PlusCircle, RefreshCw, Layers, Sparkles, TrendingUp, HelpCircle
 } from "lucide-react";
-import { ResponsiveContainer, ComposedChart, XAxis, YAxis, Tooltip, CartesianGrid, Line } from "recharts";
+import { ResponsiveContainer, ComposedChart, XAxis, YAxis, Tooltip, CartesianGrid, Customized } from "recharts";
 
 // =========================================================
 // TYPES
@@ -407,6 +407,23 @@ export default function App() {
     }
   };
 
+  const getStrategyExplanation = () => {
+    if (liveStatus.last_signal) {
+      const sig = liveStatus.last_signal;
+      return `Latest signal is ${sig.strategy_name}. It will ${sig.trade_type === "BUY" ? "buy" : "sell"} ${sig.option_type} ${sig.strike_price} if the current price confirms the entry. SL is ₹${sig.stop_loss.toFixed(2)} and TP is ₹${sig.take_profit.toFixed(2)}.`;
+    }
+    if (!liveStatus.market_open) {
+      return "Market is closed. The system will resume monitoring after NSE opens and will only take CE/PE entries once CPR and price conditions align.";
+    }
+    if (liveStatus.market_classification === "BULLISH") {
+      return "Market bias is bullish. The strategy prefers call entries (CE) on bullish CPR breakouts or strength near the BC/TC pivot region. It will only take PE if the market proves weak and breaks below support levels.";
+    }
+    if (liveStatus.market_classification === "BEARISH") {
+      return "Market bias is bearish. The strategy prefers put entries (PE) on bearish CPR breakdowns or weakness near the TC/BC region. It will only take CE if the market reverses and clears resistance levels.";
+    }
+    return "Market is neutral or normal width. The system will look for either CE on bullish breakouts above CPR levels, or PE on bearish breakdowns below CPR support, depending on which side of the pivot price the market moves.";
+  };
+
   const [inputApiKey, setInputApiKey] = useState("");
   const [inputApiSecret, setInputApiSecret] = useState("");
   const [telegramToken, setTelegramToken] = useState("");
@@ -684,9 +701,37 @@ export default function App() {
     { timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "Polling backend for live market status..." },
   ]);
 
-  const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([
-    { role: "assistant", text: "Ask me about the live trading system, current CPR option strategy logic, or why a trade is not entering." }
-  ]);
+const renderCandlestick = (props: any) => {
+  const { xAxisMap, yAxisMap, width, height, payload, data } = props;
+  const xAxis = xAxisMap[0];
+  const yAxis = yAxisMap[0];
+  const xScale = xAxis.scale;
+  const yScale = yAxis.scale;
+  const candleWidth = 10;
+
+  return (
+    <g>
+      {data.map((entry: Candle, index: number) => {
+        const x = xScale(entry.time);
+        const openY = yScale(entry.open);
+        const closeY = yScale(entry.close);
+        const highY = yScale(entry.high);
+        const lowY = yScale(entry.low);
+        const candleX = x - candleWidth / 2;
+        const candleHeight = Math.max(Math.abs(closeY - openY), 1);
+        const candleY = Math.min(openY, closeY);
+        const color = entry.close >= entry.open ? "#22c55e" : "#ef4444";
+
+        return (
+          <g key={`candle-${index}`}>
+            <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth={1} />
+            <rect x={candleX} y={candleY} width={candleWidth} height={candleHeight} fill={color} />
+          </g>
+        );
+      })}
+    </g>
+  );
+};
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantLoading, setAssistantLoading] = useState(false);
 
@@ -1135,7 +1180,7 @@ export default function App() {
                           <XAxis dataKey="time" tick={{ fill: '#94a3b8', fontSize: 10 }} tickLine={false} axisLine={false} />
                           <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} tickLine={false} axisLine={false} domain={["dataMin", "dataMax"]} />
                           <Tooltip contentStyle={{ background: '#0f172a', border: '1px solid #334155' }} formatter={(value: number) => `₹${value.toFixed(2)}`} />
-                          <Line type="monotone" dataKey="close" stroke="#38bdf8" strokeWidth={2} dot={false} />
+                          <Customized component={renderCandlestick} />
                         </ComposedChart>
                       </ResponsiveContainer>
                     </div>
@@ -1190,6 +1235,10 @@ export default function App() {
                     <div className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
                       <p className="text-[10px] uppercase text-slate-500">Connection</p>
                       <p className="font-bold mt-2 text-white">{liveStatus.websocket_status}</p>
+                    </div>
+                    <div className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
+                      <p className="text-[10px] uppercase text-slate-500">Strategy insight</p>
+                      <p className="mt-2 text-sm leading-relaxed text-slate-300">{getStrategyExplanation()}</p>
                     </div>
                   </div>
                 </div>

@@ -7,6 +7,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, Depends, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -977,15 +978,40 @@ def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)
         except Exception:
             pass
 
-    deleted_trades = db.query(Trade).delete()
-    deleted_daily_states = db.query(DailyState).delete()
+    deleted_paper_trades = db.query(Trade).filter(Trade.is_paper == True).delete(synchronize_session=False)
+    today_date = date.today().strftime("%Y-%m-%d")
+
+    live_trade_count = db.query(func.count(Trade.id)).filter(
+        Trade.is_paper == False,
+        func.strftime("%Y-%m-%d", Trade.entry_time) == today_date,
+    ).scalar() or 0
+
+    live_realized_pnl = db.query(func.coalesce(func.sum(Trade.pnl), 0.0)).filter(
+        Trade.is_paper == False,
+        func.strftime("%Y-%m-%d", Trade.entry_time) == today_date,
+    ).scalar() or 0.0
+
+    state = db.query(DailyState).filter(DailyState.trade_date == today_date).first()
+    if not state:
+        state = DailyState(
+            trade_date=today_date,
+            trade_count=int(live_trade_count),
+            realized_pnl=float(live_realized_pnl),
+            is_blocked=False,
+        )
+        db.add(state)
+    else:
+        state.trade_count = int(live_trade_count)
+        state.realized_pnl = float(live_realized_pnl)
+        state.is_blocked = False
+
     db.commit()
 
     return {
         "status": "success",
-        "message": "System reset complete.",
-        "deleted_trades": deleted_trades,
-        "deleted_daily_states": deleted_daily_states,
+        "message": "System reset complete. Paper/mock trades cleared; live trades preserved.",
+        "deleted_paper_trades": deleted_paper_trades,
+        "remaining_live_trades_today": int(live_trade_count),
     }
 
 
