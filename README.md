@@ -1,6 +1,6 @@
-# 🎯 Automated CPR 4-Setup Trading System
+# 🎯 NIFTY 50 CPR Option Trading System
 
-Production-ready, highly precise intraday automated trading system built in **Python 3.12** implementing the static Central Pivot Range (CPR) strategy with **4 core setups (R1↔TC Short, S1↔BC Long, TC↔R1 Long, BC↔S1 Short)** on **NIFTY 5m candles**.
+Production-ready, highly precise intraday automated trading system built in **Python 3.12** implementing the NIFTY 50 Central Pivot Range (CPR) option trading strategy on **NIFTY 5m candles**.
 
 Integrated seamlessly with **Upstox API v2** for weekly ATM option trading, persistent tracking using **PostgreSQL/SQLite**, state machine execution preservation, and advanced real-time alerting via **Telegram Bot**.
 
@@ -17,7 +17,7 @@ Integrated seamlessly with **Upstox API v2** for weekly ATM option trading, pers
 │   └── settings.py         # Pydantic env validations and log setups
 ├── strategies/
 │   ├── __init__.py
-│   └── cpr_strategy.py     # Static CPR math & State Machine transitions
+│   └── nifty_cpr_option_strategy.py     # NIFTY 50 CPR option trading signals
 ├── brokers/
 │   ├── __init__.py
 │   └── upstox_client.py    # Upstox API Auth, instruments ATM selection & order execution

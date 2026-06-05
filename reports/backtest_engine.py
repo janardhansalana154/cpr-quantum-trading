@@ -1,5 +1,5 @@
 """
-Backtest Engine — runs all 4 CPR setups against historical Upstox data.
+Backtest Engine — runs the NIFTY 50 CPR option trading strategy against historical Upstox data.
 
 P&L MODEL:
   - SL and TP are NIFTY INDEX price levels (same as live bot)
@@ -16,7 +16,7 @@ from typing import List, Dict, Optional, Any
 import logging
 
 from config.settings import settings
-from strategies.cpr_strategy import SetupStateMachine, calculate_cpr_levels
+from strategies.nifty_cpr_option_strategy import calculate_cpr_levels, find_trade_signal
 
 logger = logging.getLogger("CPR_System.Backtest")
 
@@ -174,17 +174,10 @@ def run_backtest(
             skipped_days.append(str(trading_date))
             continue
 
-        # Fresh state machines per day
-        setups = {n: SetupStateMachine(n) for n in ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]}
-        for sm in setups.values():
-            sm.fail_win = fw;  sm.ret_win = rw
-            sm.con_win  = cw;  sm.ent_win = ew
-            sm.ret_tol  = rt
-
-        day_trades:       List[Dict] = []
-        trade_count:      int        = 0
-        open_trade:       Optional[Dict] = None
-        day_realized_pnl:     float      = 0.0
+        day_trades: List[Dict] = []
+        trade_count: int = 0
+        open_trade: Optional[Dict] = None
+        day_realized_pnl: float = 0.0
         open_trade_exit_time: Optional[str] = None
 
         for idx, candle in enumerate(candles):
@@ -235,59 +228,55 @@ def run_backtest(
                 logger.info(f"[BACKTEST] {trading_date} day loss limit hit (₹{day_realized_pnl:.0f}) — no more trades.")
                 break
 
-            for name, sm in setups.items():
-                if open_trade:
-                    break
-                triggered, details = sm.update(candle, idx, levels)
-                if not (triggered and details):
-                    continue
+            considered_candles = candles[: idx + 1]
+            signal = find_trade_signal(considered_candles, levels, yesterday_levels, avg_width, pdh, pdl)
+            if signal is None:
+                continue
 
-                entry_price = candle["close"]
-                sl = details["stop_loss"]
-                tp = details["take_profit"]
-                trade_type  = details["trade_type"]
+            entry_price = candle["close"]
+            sl = signal.stop_loss
+            tp = signal.take_profit
+            trade_type = signal.trade_type
+            strategy_name = signal.strategy_name
 
-                # Simulate exit — with loss cap built in
-                exit_info = _simulate_exit(
-                    candles, idx, entry_price, sl, tp,
-                    trade_type, lots, day_realized_pnl, dll
-                )
+            # Simulate exit — with loss cap built in
+            exit_info = _simulate_exit(
+                candles, idx, entry_price, sl, tp,
+                trade_type, lots, day_realized_pnl, dll
+            )
 
-                trade_rec = {
-                    "date":        str(trading_date),
-                    "setup_name":  name,
-                    "trade_type":  trade_type,
-                    "option_type": "PE" if trade_type == "SELL" else "CE",
-                    "entry_price": round(entry_price, 2),
-                    "stop_loss":   round(sl, 2),
-                    "take_profit": round(tp, 2),
-                    "exit_price":  exit_info["exit_price"],
-                    "status":      exit_info["status"],
-                    "pnl":         exit_info["pnl"],
-                    "entry_time":  candle["time"],
-                    "exit_time":   exit_info["exit_time"],
-                    "cpr_r1":      levels.r1,
-                    "cpr_tc":      levels.tc,
-                    "cpr_bc":      levels.bc,
-                    "cpr_s1":      levels.s1,
-                    "cpr_pivot":   levels.pivot,
-                }
-                day_trades.append(trade_rec)
-                all_trades.append(trade_rec)
-                trade_count      += 1
-                day_realized_pnl += exit_info["pnl"]
-                # Track open trade by exit_time — block further entries until
-                # the candle loop reaches the exit candle (mirrors live bot's
-                # "only 1 trade at a time" rule)
-                open_trade_exit_time = exit_info["exit_time"]
-                open_trade           = trade_rec
+            trade_rec = {
+                "date":        str(trading_date),
+                "setup_name":  strategy_name,
+                "trade_type":  trade_type,
+                "option_type": signal.option_type,
+                "entry_price": round(entry_price, 2),
+                "stop_loss":   round(sl, 2),
+                "take_profit": round(tp, 2),
+                "exit_price":  exit_info["exit_price"],
+                "status":      exit_info["status"],
+                "pnl":         exit_info["pnl"],
+                "entry_time":  candle["time"],
+                "exit_time":   exit_info["exit_time"],
+                "cpr_r1":      levels.r1,
+                "cpr_tc":      levels.tc,
+                "cpr_bc":      levels.bc,
+                "cpr_s1":      levels.s1,
+                "cpr_pivot":   levels.pivot,
+            }
+            day_trades.append(trade_rec)
+            all_trades.append(trade_rec)
+            trade_count += 1
+            day_realized_pnl += exit_info["pnl"]
+            open_trade_exit_time = exit_info["exit_time"]
+            open_trade = trade_rec
 
-                logger.info(
-                    f"[BACKTEST] {trading_date} {name} {trade_type} "
-                    f"Entry={entry_price} SL={sl} TP={tp} → "
-                    f"{exit_info['status']} PNL=₹{exit_info['pnl']} "
-                    f"DayPNL=₹{day_realized_pnl:.0f}"
-                )
+            logger.info(
+                f"[BACKTEST] {trading_date} {strategy_name} {trade_type} "
+                f"Entry={entry_price} SL={sl} TP={tp} → "
+                f"{exit_info['status']} PNL=₹{exit_info['pnl']} "
+                f"DayPNL=₹{day_realized_pnl:.0f}"
+            )
 
         # Day summary
         day_pnl  = sum(t["pnl"] for t in day_trades)
@@ -313,17 +302,21 @@ def run_backtest(
     eod     = total - wins - losses
     net_pnl = round(sum(t["pnl"] for t in all_trades), 2)
 
-    setup_stats: Dict[str, Any] = {}
-    for sname in ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]:
-        st = [t for t in all_trades if t["setup_name"] == sname]
-        sw = sum(1 for t in st if t["status"] == "CLOSED_TP")
-        setup_stats[sname] = {
-            "trades":   len(st),
-            "wins":     sw,
-            "losses":   sum(1 for t in st if t["status"] in ("CLOSED_SL","CLOSED_SL_LIMIT")),
-            "win_rate": round(sw / len(st) * 100, 1) if st else 0.0,
-            "net_pnl":  round(sum(t["pnl"] for t in st), 2),
-        }
+    strategy_stats: Dict[str, Any] = {}
+    for t in all_trades:
+        name = t["setup_name"]
+        if name not in strategy_stats:
+            strategy_stats[name] = {"trades": 0, "wins": 0, "losses": 0, "win_rate": 0.0, "net_pnl": 0.0}
+        strategy_stats[name]["trades"] += 1
+        if t["status"] == "CLOSED_TP":
+            strategy_stats[name]["wins"] += 1
+        if t["status"] in ("CLOSED_SL", "CLOSED_SL_LIMIT"):
+            strategy_stats[name]["losses"] += 1
+        strategy_stats[name]["net_pnl"] += t["pnl"]
+
+    for stats in strategy_stats.values():
+        stats["win_rate"] = round(stats["wins"] / stats["trades"] * 100, 1) if stats["trades"] else 0.0
+        stats["net_pnl"] = round(stats["net_pnl"], 2)
 
     return {
         "start_date":      str(start_date),
@@ -342,7 +335,7 @@ def run_backtest(
             "avg_pnl_per_trade":  round(net_pnl / total, 2) if total else 0.0,
             "daily_loss_limit":   dll,
         },
-        "setup_breakdown": setup_stats,
+        "strategy_breakdown": strategy_stats,
         "day_summaries":   day_summaries,
         "trades":          all_trades,
     }

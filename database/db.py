@@ -50,7 +50,7 @@ def init_db():
     
     # Create tables if SQLite (Postgres migrations are preferred but this is robust auto-fallback)
     try:
-        from database.models import Trade, DailyState, StrategyState, UpstoxToken
+        from database.models import Trade, DailyState, UpstoxToken
         Base.metadata.create_all(bind=engine)
         _ensure_upstox_refresh_column(engine)
         logger.info("Database schemas validated and tables created successfully.")

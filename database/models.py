@@ -6,7 +6,7 @@ class Trade(Base):
     __tablename__ = "trades"
 
     id = Column(Integer, primary_key=True, index=True)
-    setup_name = Column(String(20), nullable=False)  # SETUP_A, SETUP_B, SETUP_C, SETUP_D
+    setup_name = Column(String(20), nullable=False)  # strategy identifier, e.g. BULLISH_BREAKOUT
     trade_type = Column(String(10), nullable=False)  # BUY (Long) or SELL (Short)
     option_symbol = Column(String(50), nullable=False) # e.g., NIFTY26MAY19500CE
     strike_price = Column(Float, nullable=False)
@@ -31,19 +31,6 @@ class DailyState(Base):
     realized_pnl = Column(Float, default=0.0)
     is_blocked = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-class StrategyState(Base):
-    __tablename__ = "strategy_states"
-
-    id = Column(Integer, primary_key=True, index=True)
-    setup_name = Column(String(20), unique=True, index=True)  # SETUP_A, SETUP_B, SETUP_C, SETUP_D
-    current_state = Column(Integer, default=0)  # 0=IDLE, 1=broken, 2=recovered, 3=retested, 4=confirmed
-    state_start_bar = Column(Integer, default=0)
-    retest_high = Column(Float, nullable=True)
-    retest_low = Column(Float, nullable=True)
-    confirmation_high = Column(Float, nullable=True)
-    confirmation_low = Column(Float, nullable=True)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 class UpstoxToken(Base):

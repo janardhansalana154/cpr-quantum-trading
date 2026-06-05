@@ -23,17 +23,6 @@ interface SystemLog {
   msg: string;
 }
 
-interface SetupState {
-  name: string;
-  state: number;
-  barsElapsed: number;
-  retestHigh: number | null;
-  retestLow: number | null;
-  confirmationHigh: number | null;
-  confirmationLow: number | null;
-  lastReason: string;
-}
-
 interface AssistantMessage {
   role: "user" | "assistant";
   text: string;
@@ -50,7 +39,7 @@ interface Candle {
 
 interface SimulatedTrade {
   id: string;
-  setupName: string;
+  strategyName: string;
   type: "CE" | "PE";
   strikePrice: number;
   entryPrice: number;
@@ -64,6 +53,17 @@ interface SimulatedTrade {
 }
 
 // RULE 4 + RULE 5: Strong typing for data source and market status
+interface StrategySignal {
+  strategy_name: string;
+  trade_type: string;
+  option_type: string;
+  strike_price: number;
+  entry_price: number;
+  stop_loss: number;
+  take_profit: number;
+  reason?: string;
+}
+
 interface LiveSystemStatus {
   // RULE 4: DATA SOURCE — only these four values are valid
   data_source: "UPSTOX LIVE" | "DISCONNECTED" | "HISTORICAL REPLAY" | "SIMULATION";
@@ -92,6 +92,8 @@ interface LiveSystemStatus {
   } | null;
   // RULE 6: Strategy allowed
   strategy_allowed: boolean;
+  market_classification: string | null;
+  last_signal: StrategySignal | null;
 }
 
 // =========================================================
@@ -174,6 +176,8 @@ export default function App() {
     market_detail: { weekday: "--", current_ist: "--", is_holiday: false },
     daily_summary: null,
     strategy_allowed: false,
+    market_classification: null,
+    last_signal: null,
   });
 
   // Real trades from DB — fetched from /api/trades every 15s
@@ -438,35 +442,6 @@ export default function App() {
     }
   };
 
-  const fetchSetupStates = async () => {
-    try {
-      const res = await fetch("/api/setups");
-      if (res.ok) {
-        const data = await res.json();
-        setSetupStates(prev => {
-          const next: Record<string, SetupState> = { ...prev };
-          for (const key of ["SETUP_A","SETUP_B","SETUP_C","SETUP_D"]) {
-            if (data[key]) {
-              next[key] = {
-                ...prev[key],
-                state: data[key].state,
-                barsElapsed: data[key].elapsed_bars,
-                retestHigh: data[key].retest_high,
-                retestLow: data[key].retest_low,
-                confirmationHigh: data[key].confirmation_high,
-                confirmationLow: data[key].confirmation_low,
-                lastReason: data[key].last_reason || prev[key].lastReason,
-              };
-            }
-          }
-          return next;
-        });
-      }
-    } catch {
-      // ignore setup fetch failures
-    }
-  };
-
   const handleAskAssistant = async () => {
     const trimmed = assistantQuestion.trim();
     if (!trimmed) return;
@@ -652,7 +627,7 @@ export default function App() {
     }
   };
 
-  const [activeTab, setActiveTab] = useState<"cockpit" | "stateMachines" | "reports" | "broker" | "help">("cockpit");
+  const [activeTab, setActiveTab] = useState<"cockpit" | "reports" | "broker" | "help">("cockpit");
 
   // ── DEMO ONLY: trades shown in the demo player (never confused with real DB trades)
   const [demoTrades, setDemoTrades] = useState<SimulatedTrade[]>([]);
@@ -665,17 +640,10 @@ export default function App() {
   ]);
 
   const [assistantMessages, setAssistantMessages] = useState<AssistantMessage[]>([
-    { role: "assistant", text: "Ask me about the live trading system, current setup logic, or why a trade is not entering." }
+    { role: "assistant", text: "Ask me about the live trading system, current CPR option strategy logic, or why a trade is not entering." }
   ]);
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantLoading, setAssistantLoading] = useState(false);
-
-  const [setupStates, setSetupStates] = useState<Record<string, SetupState>>({
-    "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-    "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-    "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-    "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-  });
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -709,12 +677,8 @@ export default function App() {
   useEffect(() => {
     fetchUpstoxStatus();
     fetchLiveStatus();
-    fetchSetupStates();
     fetchDashboardConfig();
-    const liveTimer   = setInterval(() => {
-      fetchLiveStatus();
-      fetchSetupStates();
-    }, 10_000);
+    const liveTimer   = setInterval(fetchLiveStatus, 10_000);
     const tradesTimer = setInterval(fetchLiveTrades, 15_000);
     fetchLiveTrades(); // immediate fetch on mount
 
@@ -787,12 +751,6 @@ export default function App() {
     setDemoTrades([]);
     setDemoPnL(0);
     setDemoTradeCount(0);
-    setSetupStates({
-      "SETUP_A": { name: "R1 → TC SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-      "SETUP_B": { name: "S1 → BC LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-      "SETUP_C": { name: "TC → R1 LONG",  state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-      "SETUP_D": { name: "BC → S1 SHORT", state: 0, barsElapsed: 0, retestHigh: null, retestLow: null, confirmationHigh: null, confirmationLow: null, lastReason: "Waiting for breakout" },
-    });
     setSystemLogs([{ timestamp: new Date().toTimeString().split(" ")[0], level: "INFO", msg: "[DEMO] Demo reset." }]);
   };
 
@@ -829,10 +787,10 @@ export default function App() {
         </div>
 
         <div className="flex gap-1 p-0.5 bg-slate-950 rounded border border-slate-800">
-          {(["cockpit", "stateMachines", "reports", "broker", "help"] as const).map(tab => (
+          {(["cockpit", "reports", "broker", "help"] as const).map(tab => (
             <button key={tab} onClick={() => setActiveTab(tab)}
               className={`px-4 py-1.5 rounded text-xs font-bold font-mono transition-all uppercase tracking-wider cursor-pointer ${activeTab === tab ? "bg-indigo-600 text-white" : "text-slate-400 hover:text-white"}`}>
-              {tab === "stateMachines" ? "Setups" : tab === "broker" ? "Upstox" : tab.charAt(0).toUpperCase() + tab.slice(1)}
+              {tab === "broker" ? "Upstox" : tab.charAt(0).toUpperCase() + tab.slice(1)}
             </button>
           ))}
         </div>
@@ -1027,144 +985,134 @@ export default function App() {
           )}
 
           {activeTab === "cockpit" && (
-            <div className="flex flex-col gap-6">
-              {/* Setup State Machines overview */}
-              <div className="grid grid-cols-2 gap-6">
-                {(["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"] as const).map(key => {
-                  const ss = setupStates[key];
-                  const colorMap: Record<string, string> = {
-                    SETUP_A: "rose", SETUP_B: "emerald", SETUP_C: "sky", SETUP_D: "purple"
-                  };
-                  const c = colorMap[key];
-                  return (
-                    <div key={key} className={`bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-col justify-between h-36 transition-all ${ss.state > 0 ? `border-${c}-500/30 ring-1 ring-${c}-500/15` : ""}`}>
-                      <div className="flex justify-between items-start">
-                        <div>
-                          <span className={`text-[10px] px-2 py-0.5 bg-${c}-600 text-white font-bold rounded uppercase font-mono`}>{key}</span>
-                          <h3 className="text-sm font-bold text-white mt-1">{ss.name}</h3>
+            <div className="grid gap-6 lg:grid-cols-[1.35fr_0.65fr]">
+              <div className="space-y-6">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Market Classification</p>
+                        <h3 className="text-lg font-bold text-white mt-2">{liveStatus.market_classification || "Monitoring CPR bias"}</h3>
+                      </div>
+                      <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${liveStatus.market_classification === "BULLISH" ? "bg-emerald-500/10 text-emerald-300" : liveStatus.market_classification === "BEARISH" ? "bg-rose-500/10 text-rose-300" : "bg-slate-800 text-slate-400"}`}>
+                        {liveStatus.market_classification || "Unknown"}
+                      </span>
+                    </div>
+                    <p className="text-sm leading-relaxed text-slate-400">The live engine uses current CPR width and breakout momentum to classify the day. This guides whether the system prefers range reversal or breakout option signals.</p>
+                  </div>
+                  <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Latest Entry Signal</p>
+                        <h3 className="text-lg font-bold text-white mt-2">{liveStatus.last_signal ? `${liveStatus.last_signal.trade_type} ${liveStatus.last_signal.option_type}` : "No active signal"}</h3>
+                      </div>
+                      <span className={`text-[10px] uppercase font-bold px-2 py-1 rounded ${liveStatus.last_signal ? "bg-sky-500/10 text-sky-300" : "bg-slate-800 text-slate-400"}`}>
+                        {liveStatus.last_signal ? liveStatus.last_signal.strategy_name : "Idle"}
+                      </span>
+                    </div>
+                    {liveStatus.last_signal ? (
+                      <div className="space-y-3 text-slate-300 text-sm">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="rounded-2xl bg-slate-900/70 p-3">
+                            <p className="text-[10px] uppercase text-slate-500">Entry</p>
+                            <p className="font-bold mt-1">₹{liveStatus.last_signal.entry_price.toFixed(2)}</p>
+                          </div>
+                          <div className="rounded-2xl bg-slate-900/70 p-3">
+                            <p className="text-[10px] uppercase text-slate-500">Strike</p>
+                            <p className="font-bold mt-1">₹{liveStatus.last_signal.strike_price.toFixed(0)}</p>
+                          </div>
                         </div>
-                        <span className={`text-[10px] font-mono uppercase font-bold ${ss.state > 3 ? `text-${c}-400` : ss.state > 0 ? "text-amber-400 animate-pulse" : "text-slate-500"}`}>
-                          {["IDLE","BROKEN","RECOVERED","ARMED"][ss.state] || "IDLE"}
-                        </span>
-                      </div>
-                      <div className="flex gap-1.5 mt-4">
-                        {[1,2,3,4,5].map(step => (
-                          <div key={step} className={`h-1.5 flex-1 rounded-full transition-all ${ss.state >= step ? `bg-${c}-500` : "bg-slate-800"}`} />
-                        ))}
-                      </div>
-                      <div className="mt-3 text-[11px] leading-snug text-slate-300 font-mono">
-                        {ss.lastReason}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              <div className="bg-slate-900/40 border border-slate-800 rounded-2xl p-5">
-                <div className="flex items-center justify-between pb-3 border-b border-slate-800/40 mb-4">
-                  <div>
-                    <h3 className="text-sm font-bold text-white">Why no entry yet?</h3>
-                    <p className="text-[11px] text-slate-500 mt-1">Snapshot of the current setup state and blocking reason for each active setup.</p>
-                  </div>
-                  <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Live explanation</span>
-                </div>
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {(["SETUP_A", "SETUP_B", "SETUP_C", "SETUP_D"] as const).map(key => {
-                    const ss = setupStates[key];
-                    return (
-                      <div key={key} className="rounded-xl border border-slate-800 bg-slate-950/80 p-4">
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <span className="text-[10px] text-slate-400 uppercase font-mono">{key}</span>
-                          <span className="text-[10px] font-bold uppercase text-slate-300">{["IDLE","BROKEN","RECOVERED","ARMED"][ss.state] || "IDLE"}</span>
+                        <div className="grid grid-cols-2 gap-3 text-slate-300 text-sm">
+                          <div className="rounded-2xl bg-slate-900/70 p-3">
+                            <p className="text-[10px] uppercase text-slate-500">Stop Loss</p>
+                            <p className="font-bold mt-1">₹{liveStatus.last_signal.stop_loss.toFixed(2)}</p>
+                          </div>
+                          <div className="rounded-2xl bg-slate-900/70 p-3">
+                            <p className="text-[10px] uppercase text-slate-500">Target</p>
+                            <p className="font-bold mt-1">₹{liveStatus.last_signal.take_profit.toFixed(2)}</p>
+                          </div>
                         </div>
-                        <p className="text-[12px] text-slate-200 leading-relaxed">{ss.lastReason}</p>
+                        {liveStatus.last_signal.reason && <p className="text-[12px] text-slate-400">{liveStatus.last_signal.reason}</p>}
                       </div>
-                    );
-                  })}
+                    ) : (
+                      <p className="text-sm leading-relaxed text-slate-400">The live engine is monitoring CPR and option signal conditions. No trade will be taken until the new NIFTY 50 CPR option rules are satisfied.</p>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">CPR status</p>
+                      <h3 className="text-lg font-bold text-white">Current CPR levels</h3>
+                    </div>
+                    <span className="text-[10px] uppercase font-bold px-2 py-1 rounded bg-slate-800 text-slate-400">Realtime</span>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                    {[
+                      { label: "R1", value: displayCpr.r1 },
+                      { label: "TC", value: displayCpr.tc },
+                      { label: "Pivot", value: displayCpr.pivot },
+                      { label: "BC", value: displayCpr.bc },
+                      { label: "S1", value: displayCpr.s1 },
+                    ].map(item => (
+                      <div key={item.label} className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
+                        <div className="text-[10px] uppercase tracking-wider text-slate-500 font-mono">{item.label}</div>
+                        <div className="text-xl font-bold text-white mt-2">{item.value.toFixed(2)}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-4 text-sm leading-relaxed text-slate-400">Levels are computed from previous-day OHLC and used by the strategy to determine entry bias, option type selection, and risk limits.</p>
                 </div>
               </div>
 
-              {/* DEMO chart — clearly labeled */}
-              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-col gap-4">
-                <div className="flex justify-between items-center pb-2 border-b border-slate-800/40">
-                  <h3 className="text-xs font-mono tracking-widest text-slate-400 uppercase flex items-center gap-1.5 font-bold">
-                    <Sparkles className="h-4 w-4 text-amber-400" />
-                    DEMO PLAYER — Not Live Data
-                  </h3>
-                  <span className="text-[10px] text-amber-400 font-mono bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded">DEMO ONLY</span>
-                </div>
-
-                <div className="h-[200px] w-full bg-slate-950 rounded-lg p-2 border border-slate-900">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <ComposedChart data={DEMO_CANDLES.slice(0, currentIdx + 1)}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="rgba(51,65,85,0.06)" />
-                      <XAxis dataKey="time" stroke="#475569" style={{ fontSize: "10px", fontFamily: "monospace" }} />
-                      <YAxis domain={["auto", "auto"]} stroke="#475569" style={{ fontSize: "10px", fontFamily: "monospace" }} />
-                      <Tooltip contentStyle={{ backgroundColor: "#0f172a", border: "1px solid #1e293b", borderRadius: "8px" }} />
-                      <Line type="monotone" dataKey="close" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3, fill: "#f59e0b" }} name="Demo Close" />
-                    </ComposedChart>
-                  </ResponsiveContainer>
-                </div>
-
-                <div className="flex flex-wrap gap-4 items-center justify-between p-3 bg-slate-950 rounded-lg border border-slate-850">
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setIsPlaying(!isPlaying)}
-                      className={`flex items-center gap-1.5 px-4 py-2 rounded text-xs font-bold uppercase tracking-wider cursor-pointer ${isPlaying ? "bg-amber-500 text-slate-950 animate-pulse" : "bg-amber-500/80 hover:bg-amber-400 text-slate-950"}`}>
-                      {isPlaying ? <><Pause className="h-4 w-4 fill-current" />Pause</> : <><Play className="h-4 w-4 fill-current" />Play Demo</>}
-                    </button>
-                    <button onClick={() => setCurrentIdx(p => Math.min(p + 1, DEMO_CANDLES.length - 1))} disabled={isPlaying}
-                      className="p-2 bg-slate-900 border border-slate-800 rounded hover:bg-slate-800 text-slate-300 disabled:opacity-50 cursor-pointer">
-                      <PlusCircle className="h-4 w-4" />
-                    </button>
-                    <button onClick={handleResetDemo}
-                      className="p-2 bg-slate-900 border border-slate-800 rounded hover:bg-slate-800 text-slate-300 cursor-pointer">
-                      <RotateCcw className="h-4 w-4" />
-                    </button>
+              <aside className="space-y-6">
+                <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <div>
+                      <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Risk Control</p>
+                      <h3 className="text-lg font-bold text-white">Daily protections</h3>
+                    </div>
+                    <span className="text-[10px] uppercase font-bold px-2 py-1 rounded bg-slate-800 text-slate-400">Live</span>
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-slate-500 font-mono uppercase">Speed:</span>
-                    <div className="flex bg-slate-900 p-0.5 rounded border border-slate-800">
-                      {[2000, 1000, 400].map(ms => (
-                        <button key={ms} onClick={() => setSpeedMs(ms)}
-                          className={`px-2.5 py-1 rounded text-[10px] font-bold font-mono cursor-pointer ${speedMs === ms ? "bg-slate-800 text-amber-400" : "text-slate-500 hover:text-slate-300"}`}>
-                          {ms === 2000 ? "1x" : ms === 1000 ? "2x" : "5x"}
-                        </button>
-                      ))}
+                  <div className="space-y-3 text-slate-300 text-sm">
+                    <div className="flex justify-between">
+                      <span>Trades today</span>
+                      <span className="font-bold">{realTradeCount}/{realMaxTrades}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Daily P&L</span>
+                      <span className={`font-bold ${realPnL >= 0 ? "text-emerald-400" : "text-rose-400"}`}>₹{realPnL.toFixed(2)}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span>Strategy state</span>
+                      <span className={`font-bold ${liveStatus.strategy_allowed ? "text-emerald-400" : "text-rose-400"}`}>{liveStatus.strategy_allowed ? "Allowed" : "Blocked"}</span>
+                    </div>
+                    <div className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
+                      <p className="text-[10px] uppercase text-slate-500 tracking-widest font-mono">Current CMP</p>
+                      <p className="text-3xl font-bold text-white mt-2">{currentPrice != null ? `₹${currentPrice.toFixed(2)}` : "Disconnected"}</p>
                     </div>
                   </div>
                 </div>
-                <p className="text-[10px] text-slate-600 font-mono italic">
-                  ⚠ This demo player uses hardcoded sample candles for illustration only.
-                  The live backend engine fetches real Upstox candles independently.
-                </p>
-              </div>
 
-              {/* Strategy parameters */}
-              <div className="bg-slate-900/40 border border-slate-800 rounded-xl p-5 flex flex-col gap-4">
-                <div className="flex items-center gap-1.5">
-                  <Sliders className="h-4 w-4 text-indigo-400" />
-                  <h3 className="text-xs font-mono tracking-widest text-slate-400 uppercase font-bold">Strategy Hyperparameters</h3>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
-                  {[
-                    { label: "Breakout Window (bars)", key: "failWin" as const, type: "number" },
-                    { label: "Retest Timeout (bars)",  key: "retWin"  as const, type: "number" },
-                    { label: "Entry Window (bars)",    key: "conWin"  as const, type: "number" },
-                    { label: "Retest Tolerance (pts)", key: "retTol"  as const, type: "decimal" },
-                    { label: "SL Buffer (pts)",        key: "slBuf"   as const, type: "decimal" },
-                    { label: "Loss Limit (₹)",         key: "lossLimit" as const, type: "number" },
-                  ].map(({ label, key, type }) => (
-                    <div key={key} className="flex flex-col gap-1.5">
-                      <label className="text-slate-400 font-semibold">{label}</label>
-                      <input type="number" step={type === "decimal" ? "0.5" : "1"}
-                        value={config[key]}
-                        onChange={e => setConfig(p => ({ ...p, [key]: type === "decimal" ? parseFloat(e.target.value) || 0 : parseInt(e.target.value) || 1 }))}
-                        className="bg-slate-950 border border-slate-800 rounded-lg p-2 font-mono text-slate-100 focus:outline-none focus:border-indigo-500 font-bold"
-                      />
+                <div className="rounded-3xl border border-slate-800 bg-slate-950/80 p-6 shadow-sm">
+                  <div className="mb-4">
+                    <p className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">Live stream</p>
+                    <h3 className="text-lg font-bold text-white">Signal & status</h3>
+                  </div>
+                  <div className="space-y-3 text-sm text-slate-300">
+                    <div className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
+                      <p className="text-[10px] uppercase text-slate-500">CMP Source</p>
+                      <p className="font-bold mt-2 text-white">{liveStatus.cmp_source}</p>
+                      {liveStatus.cmp_last_updated && <p className="mt-1 text-slate-500 text-[11px]">Updated at {liveStatus.cmp_last_updated.slice(11, 19)} UTC</p>}
                     </div>
-                  ))}
+                    <div className="rounded-2xl bg-slate-900/70 p-4 border border-slate-800">
+                      <p className="text-[10px] uppercase text-slate-500">Connection</p>
+                      <p className="font-bold mt-2 text-white">{liveStatus.websocket_status}</p>
+                    </div>
+                  </div>
                 </div>
-              </div>
+              </aside>
             </div>
           )}
 
@@ -1205,15 +1153,17 @@ export default function App() {
                     </div>
                     {reportResult.metrics.total_trades === 0
                       ? <div className="text-xs text-slate-500 text-center py-4">No trades placed by the bot on this date.</div>
-                      : reportResult.trades.map((t: any) => (
-                        <div key={t.id} className="bg-slate-800 border border-slate-700 rounded p-3 mb-2 text-xs font-mono">
-                          <div className="flex justify-between">
-                            <span className={`font-bold ${t.option_type === "CE" ? "text-sky-400" : "text-amber-400"}`}>{t.setup_name} — {t.option_type}</span>
-                            <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
-                          </div>
+                      : reportResult.trades.map((t: any) => {
+                        const strategyLabel = t.strategy_name ?? t.setup_name ?? "Strategy";
+                        return (
+                          <div key={t.id} className="bg-slate-800 border border-slate-700 rounded p-3 mb-2 text-xs font-mono">
+                            <div className="flex justify-between">
+                              <span className={`font-bold ${t.option_type === "CE" ? "text-sky-400" : "text-amber-400"}`}>{strategyLabel} — {t.option_type}</span>
+                              <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
+                            </div>
                           <div className="text-slate-500 mt-1">Entry ₹{t.entry_price} → Exit ₹{t.exit_price} | {t.status}</div>
                         </div>
-                      ))
+                      )})
                     }
                   </div>
                 )}
@@ -1225,7 +1175,7 @@ export default function App() {
                   <span>🔬</span> Backtest Engine
                   <span className="text-[10px] text-slate-500 font-normal normal-case ml-1">(simulate strategy on past NIFTY data)</span>
                 </h3>
-                <p className="text-[11px] text-slate-500 mb-4">Fetches real historical NIFTY 5m data from Upstox and replays all 4 setups. Requires Upstox to be connected.</p>
+                <p className="text-[11px] text-slate-500 mb-4">Fetches real historical NIFTY 5m data from Upstox and simulates the NIFTY CPR option trading strategy. Requires Upstox to be connected.</p>
 
                 <div className="flex gap-3 items-end flex-wrap">
                   <div className="flex flex-col gap-1">
@@ -1283,11 +1233,11 @@ export default function App() {
                       ))}
                     </div>
 
-                    {/* Per-setup breakdown */}
+                    {/* Per-strategy breakdown */}
                     <div className="mb-4">
-                      <div className="text-[11px] text-slate-400 font-mono uppercase font-bold mb-2">Setup Breakdown</div>
+                      <div className="text-[11px] text-slate-400 font-mono uppercase font-bold mb-2">Strategy Breakdown</div>
                       <div className="grid grid-cols-2 gap-2">
-                        {Object.entries(btResult.setup_breakdown).map(([name, s]: [string, any]) => (
+                        {Object.entries(btResult.strategy_breakdown).map(([name, s]: [string, any]) => (
                           <div key={name} className={`bg-slate-800 border rounded-lg p-3 ${s.net_pnl >= 0 ? "border-emerald-800/50" : "border-rose-800/50"}`}>
                             <div className="flex justify-between items-center">
                               <span className="text-xs font-bold font-mono text-slate-200">{name}</span>
@@ -1328,12 +1278,14 @@ export default function App() {
                       <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
                         {btResult.trades.length === 0
                           ? <div className="text-xs text-slate-500 text-center py-6">No trades triggered in this period.</div>
-                          : btResult.trades.map((t: any, i: number) => (
-                            <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-[11px] font-mono">
-                              <div className="flex justify-between items-center">
-                                <span className="text-slate-300 font-bold">{t.date} — {t.setup_name}</span>
-                                <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
-                              </div>
+                          : btResult.trades.map((t: any, i: number) => {
+                            const strategyLabel = t.strategy_name ?? t.setup_name ?? "Strategy";
+                            return (
+                              <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-[11px] font-mono">
+                                <div className="flex justify-between items-center">
+                                  <span className="text-slate-300 font-bold">{t.date} — {strategyLabel}</span>
+                                  <span className={`font-bold ${t.pnl >= 0 ? "text-emerald-400" : "text-rose-400"}`}>{t.pnl >= 0 ? "+" : ""}₹{t.pnl}</span>
+                                </div>
                               <div className="text-slate-500 mt-0.5">
                                 {t.option_type} · Entry ₹{t.entry_price} · Exit ₹{t.exit_price} · SL ₹{t.stop_loss} · TP ₹{t.take_profit}
                               </div>
@@ -1342,7 +1294,7 @@ export default function App() {
                                 <span className={`font-bold text-[10px] ${t.status === "CLOSED_TP" ? "text-emerald-400" : t.status === "CLOSED_SL" ? "text-rose-400" : "text-amber-400"}`}>{t.status}</span>
                               </div>
                             </div>
-                          ))
+                          )})
                         }
                       </div>
                     )}
@@ -1351,7 +1303,7 @@ export default function App() {
                     {btTab === "daily" && (
                       <div className="flex flex-col gap-1.5 max-h-96 overflow-y-auto pr-1">
                         {btResult.day_summaries.filter((d: any) => d.trades > 0).length === 0
-                          ? <div className="text-xs text-slate-500 text-center py-6">No trading days with triggered setups.</div>
+                          ? <div className="text-xs text-slate-500 text-center py-6">No trading days with triggered strategy signals.</div>
                           : btResult.day_summaries.filter((d: any) => d.trades > 0).map((d: any, i: number) => (
                             <div key={i} className="bg-slate-800 border border-slate-700 rounded-lg p-3 text-[11px] font-mono flex justify-between items-center">
                               <div>
@@ -1369,53 +1321,6 @@ export default function App() {
                 )}
               </div>
 
-            </div>
-          )}
-
-          {activeTab === "stateMachines" && (
-            <div className="flex flex-col gap-6">
-              {Object.entries(setupStates).map(([key, item]) => {
-                const setup = item as SetupState;
-                return (
-                  <div key={key} className="bg-slate-900/40 p-5 rounded-xl border border-slate-800">
-                    <div className="flex items-center justify-between mb-4 border-b border-slate-800 pb-3">
-                      <h4 className="text-sm font-bold text-slate-100">{key}: {setup.name}</h4>
-                      <span className="text-xs px-2.5 py-1 rounded font-bold font-mono bg-slate-800 text-slate-400">
-                        STAGE {setup.state} — {["IDLE","BROKEN","RECOVERED","RETESTED (ARMED)"][setup.state] || "IDLE"}
-                      </span>
-                    </div>
-                    <div className="grid grid-cols-4 gap-2">
-                      {[
-                        { label: "Breakout",     desc: "hi+cl beyond level" },
-                        { label: "Recovery",     desc: "close back inside"   },
-                        { label: "Retest",       desc: "touches level again" },
-                        { label: "Entry Armed",  desc: "cross retest hi/lo"  },
-                      ].map(({ label, desc }, sIdx) => {
-                        const isDone    = setup.state >= sIdx + 1;
-                        const isCurrent = setup.state === sIdx + 1;
-                        return (
-                          <div key={label} className={`p-3 rounded border flex flex-col gap-1 transition-all ${
-                            isDone
-                              ? "bg-emerald-950/20 text-emerald-400 border-emerald-900/60"
-                              : isCurrent
-                              ? "bg-amber-950/20 text-amber-400 border-amber-900/60 animate-pulse"
-                              : "bg-slate-950/40 text-slate-600 border-slate-900/40"
-                          }`}>
-                            <span className="text-[10px] font-mono font-bold">Step 0{sIdx+1}</span>
-                            <span className="text-xs font-bold">{label}</span>
-                            <span className="text-[9px] text-slate-500 font-mono leading-tight">{desc}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
-                    <div className="mt-3 grid grid-cols-2 gap-3 text-xs font-mono bg-slate-950 p-3 rounded border border-slate-900">
-                      <div><span className="text-slate-500">Retest High: </span><span className="text-emerald-400 font-bold">{setup.retestHigh || "--"}</span></div>
-                      <div><span className="text-slate-500">Retest Low: </span><span className="text-emerald-400 font-bold">{setup.retestLow || "--"}</span></div>
-                      <div className="col-span-2 text-[10px] text-slate-600">Entry triggers when next candle crosses retest low (shorts) or retest high (longs)</div>
-                    </div>
-                  </div>
-                );
-              })}
             </div>
           )}
 
@@ -1670,7 +1575,7 @@ export default function App() {
                 <div className="flex items-center justify-between mb-4">
                   <div>
                     <h4 className="text-sm font-bold text-white">Ask the System</h4>
-                    <p className="text-[11px] text-slate-500 mt-1">Ask a question and get an answer based on live status, CPR setup states, and trading rules.</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Ask a question and get an answer based on live status, CPR option strategy signals, and trading rules.</p>
                   </div>
                   <span className="text-[10px] uppercase tracking-widest text-slate-500 font-mono">AI Assistant</span>
                 </div>

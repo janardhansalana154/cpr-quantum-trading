@@ -12,7 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 from config.settings import settings
 from database.db import get_db, init_db
-from database.models import Trade, DailyState, StrategyState
+from database.models import Trade, DailyState
 from brokers.upstox_client import UpstoxClient, is_market_open, get_market_status_detail
 from risk.manager import RiskManager
 from strategies.nifty_cpr_option_strategy import (
@@ -730,12 +730,6 @@ def health_check():
     }
 
 
-@app.get("/api/setups")
-def get_active_setups():
-    # Legacy setup state machines removed — endpoint retained for compatibility.
-    return {"setups": {}}
-
-
 @app.get("/api/trades")
 def get_recent_trades(db: Session = Depends(get_db)):
     trades = db.query(Trade).order_by(Trade.entry_time.desc()).all()
@@ -927,19 +921,6 @@ def get_config():
     }
 
 
-@app.post("/api/reset-strategy")
-def reset_strategy_states():
-    # Legacy in-memory setup machines removed — reset persisted strategy states instead
-    from database.db import SessionLocal
-    db = SessionLocal()
-    try:
-        deleted = db.query(StrategyState).delete()
-        db.commit()
-        return {"status": "success", "message": "All persisted strategy states reset.", "deleted": deleted}
-    finally:
-        db.close()
-
-
 @app.post("/api/reset-daily")
 def reset_daily_state(db: Session = Depends(get_db)):
     from datetime import date as date_cls
@@ -983,7 +964,6 @@ def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)
 
     deleted_trades = db.query(Trade).delete()
     deleted_daily_states = db.query(DailyState).delete()
-    deleted_strategy_states = db.query(StrategyState).delete()
     db.commit()
 
     return {
@@ -991,7 +971,6 @@ def reset_system_state(force: bool = Query(False), db: Session = Depends(get_db)
         "message": "System reset complete.",
         "deleted_trades": deleted_trades,
         "deleted_daily_states": deleted_daily_states,
-        "deleted_strategy_states": deleted_strategy_states,
     }
 
 
