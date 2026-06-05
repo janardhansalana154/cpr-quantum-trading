@@ -702,35 +702,55 @@ export default function App() {
   ]);
 
 const renderCandlestick = (props: any) => {
-  const { xAxisMap, yAxisMap, width, height, payload, data } = props;
-  const xAxis = xAxisMap[0];
-  const yAxis = yAxisMap[0];
-  const xScale = xAxis.scale;
-  const yScale = yAxis.scale;
-  const candleWidth = 10;
+  try {
+    const { xAxisMap, yAxisMap, width = 0, data = [] } = props;
+    if (!Array.isArray(xAxisMap) || !Array.isArray(yAxisMap) || data.length === 0) {
+      return null;
+    }
 
-  return (
-    <g>
-      {data.map((entry: Candle, index: number) => {
-        const x = xScale(entry.time);
-        const openY = yScale(entry.open);
-        const closeY = yScale(entry.close);
-        const highY = yScale(entry.high);
-        const lowY = yScale(entry.low);
-        const candleX = x - candleWidth / 2;
-        const candleHeight = Math.max(Math.abs(closeY - openY), 1);
-        const candleY = Math.min(openY, closeY);
-        const color = entry.close >= entry.open ? "#22c55e" : "#ef4444";
+    const xAxis = xAxisMap[0];
+    const yAxis = yAxisMap[0];
+    const xScale = xAxis?.scale;
+    const yScale = yAxis?.scale;
+    if (typeof xScale !== "function" || typeof yScale !== "function") {
+      return null;
+    }
 
-        return (
-          <g key={`candle-${index}`}>
-            <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth={1} />
-            <rect x={candleX} y={candleY} width={candleWidth} height={candleHeight} fill={color} />
-          </g>
-        );
-      })}
-    </g>
-  );
+    const candleWidth = Math.max(4, Math.min(16, Math.round(width / data.length / 2)));
+
+    return (
+      <g>
+        {data.map((entry: Candle, index: number) => {
+          let x = xScale(entry.time);
+          if (x == null || Number.isNaN(x)) {
+            x = xScale(index);
+          }
+          const openY = yScale(entry.open);
+          const closeY = yScale(entry.close);
+          const highY = yScale(entry.high);
+          const lowY = yScale(entry.low);
+
+          if ([x, openY, closeY, highY, lowY].some(v => v == null || Number.isNaN(v))) {
+            return null;
+          }
+
+          const candleX = x - candleWidth / 2;
+          const candleHeight = Math.max(Math.abs(closeY - openY), 1);
+          const candleY = Math.min(openY, closeY);
+          const color = entry.close >= entry.open ? "#22c55e" : "#ef4444";
+
+          return (
+            <g key={`candle-${index}`}>
+              <line x1={x} x2={x} y1={highY} y2={lowY} stroke={color} strokeWidth={1} />
+              <rect x={candleX} y={candleY} width={candleWidth} height={candleHeight} fill={color} />
+            </g>
+          );
+        })}
+      </g>
+    );
+  } catch (error) {
+    return null;
+  }
 };
   const [assistantQuestion, setAssistantQuestion] = useState("");
   const [assistantLoading, setAssistantLoading] = useState(false);
