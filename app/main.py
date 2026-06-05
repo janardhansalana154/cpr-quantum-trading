@@ -905,6 +905,20 @@ def update_config(data: dict, db: Session = Depends(get_db)):
         settings.RETEST_TOLERANCE = float(data["retest_tolerance"])
     if "mock_mode" in data:
         settings.MOCK_MODE = bool(data["mock_mode"])
+        # If mock mode is toggled on at runtime, prepare the Upstox mock sequence
+        if upstox is not None:
+            try:
+                if settings.MOCK_MODE and hasattr(upstox, "_build_mock_sequence"):
+                    upstox._mock_sequence = upstox._build_mock_sequence()
+                    upstox._mock_bar_index = 1
+                else:
+                    # clear any existing mock sequence when disabling
+                    if hasattr(upstox, "_mock_sequence"):
+                        upstox._mock_sequence = []
+                    if hasattr(upstox, "_mock_bar_index"):
+                        upstox._mock_bar_index = None
+            except Exception:
+                logger.exception("Failed to (re)build mock sequence while toggling mock_mode")
     if "trading_mode" in data and data["trading_mode"] in ("paper","live"):
         settings.TRADING_MODE = data["trading_mode"]
 
@@ -1092,8 +1106,14 @@ def run_backtest_endpoint(
     if delta > 90:
         raise HTTPException(status_code=400, detail="Date range cannot exceed 90 days")
 
-    result = run_backtest(start_date, end_date, upstox)
-    return result
+    try:
+        result = run_backtest(start_date, end_date, upstox)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Backtest failed")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ------------------------------------------------------------------
